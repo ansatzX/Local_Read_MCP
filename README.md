@@ -61,38 +61,38 @@ Restart Claude Code to load the MCP server.
 
 All tools support enhanced parameters for pagination, structured extraction, and content control.
 
-| Tool                      | Description                  | Formats             |
-| ------------------------- | ---------------------------- | ------------------- |
-| `read_pdf`              | PDF to markdown with LaTeX fixing | .pdf          |
-| `read_word`             | Word to markdown             | .docx, .doc         |
-| `read_excel`            | Excel to markdown tables     | .xlsx, .xls         |
-| `read_powerpoint`       | PowerPoint to markdown       | .pptx, .ppt         |
-| `read_html`             | HTML to markdown             | .html, .htm         |
-| `read_text`             | Plain text files             | .txt, .md, .py, .sh |
-| `read_json`             | Parse and format JSON        | .json               |
-| `read_csv`              | CSV to markdown tables       | .csv                |
-| `read_yaml`             | Parse YAML                   | .yaml, .yml         |
-| `read_zip`              | List ZIP contents            | .zip                |
-| `read_with_markitdown`  | Universal fallback converter | Many formats        |
-| `get_supported_formats` | List all supported formats   | -                   |
+| Tool                      | Description                       | Formats             |
+| ------------------------- | --------------------------------- | ------------------- |
+| `read_pdf`              | PDF to markdown with LaTeX fixing | .pdf                |
+| `read_word`             | Word to markdown                  | .docx, .doc         |
+| `read_excel`            | Excel to markdown tables          | .xlsx, .xls         |
+| `read_powerpoint`       | PowerPoint to markdown            | .pptx, .ppt         |
+| `read_html`             | HTML to markdown                  | .html, .htm         |
+| `read_text`             | Plain text files                  | .txt, .md, .py, .sh |
+| `read_json`             | Parse and format JSON             | .json               |
+| `read_csv`              | CSV to markdown tables            | .csv                |
+| `read_yaml`             | Parse YAML                        | .yaml, .yml         |
+| `read_zip`              | List ZIP contents                 | .zip                |
+| `read_with_markitdown`  | Universal fallback converter      | Many formats        |
+| `get_supported_formats` | List all supported formats        | -                   |
 
 ### Common Parameters
 
 All read tools accept these optional parameters:
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `page` | int | 1 | Page number for pagination (1-indexed) |
-| `page_size` | int | 10000 | Characters per page |
-| `offset` | int | None | Character offset (alternative to page) |
-| `limit` | int | None | Character limit (alternative to page_size) |
-| `extract_sections` | bool | False | Extract document sections/headings |
-| `extract_tables` | bool | False | Extract table information |
-| `extract_metadata` | bool | False | Extract file metadata |
-| `preview_only` | bool | False | Return preview (first N lines) |
-| `preview_lines` | int | 100 | Lines to show in preview mode |
-| `session_id` | str | None | Session ID for pagination tracking |
-| `return_format` | str | "text" | Output format: "text" or "json" |
+| Parameter            | Type | Default | Description                                |
+| -------------------- | ---- | ------- | ------------------------------------------ |
+| `page`             | int  | 1       | Page number for pagination (1-indexed)     |
+| `page_size`        | int  | 10000   | Characters per page                        |
+| `offset`           | int  | None    | Character offset (alternative to page)     |
+| `limit`            | int  | None    | Character limit (alternative to page_size) |
+| `extract_sections` | bool | False   | Extract document sections/headings         |
+| `extract_tables`   | bool | False   | Extract table information                  |
+| `extract_metadata` | bool | False   | Extract file metadata                      |
+| `preview_only`     | bool | False   | Return preview (first N lines)             |
+| `preview_lines`    | int  | 100     | Lines to show in preview mode              |
+| `session_id`       | str  | None    | Session ID for pagination tracking         |
+| `return_format`    | str  | "text"  | Output format: "text" or "json"            |
 
 ## Usage Examples
 
@@ -226,6 +226,7 @@ make run-http
 ### Return Formats
 
 #### Text Format (default)
+
 ```json
 {
   "success": true,
@@ -236,6 +237,7 @@ make run-http
 ```
 
 #### JSON Format (structured)
+
 ```json
 {
   "success": true,
@@ -271,3 +273,23 @@ make run-http
 ## License
 
 MIT License
+
+---
+
+## Claude Code Custom Instructions
+
+This section provides optimized custom instructions for Claude Code in both Chinese and English. These instructions help Claude Code automatically use the correct MCP tools for document processing.
+
+### How to Use
+
+Copy the content from [CUSTOM_INSTRUCTIONS_CN.md](./CUSTOM_INSTRUCTIONS_CN.md) (Chinese) or [CUSTOM_INSTRUCTIONS_EN.md](./CUSTOM_INSTRUCTIONS_EN.md) (English) and paste it in UI.
+
+---
+
+### 中文版本 (Chinese Version)
+
+完整内容请查看: [CUSTOM_INSTRUCTIONS_CN.md](./CUSTOM_INSTRUCTIONS_CN.md)
+
+### English Version
+
+完整内容请查看: [CUSTOM_INSTRUCTIONS_EN.md](./CUSTOM_INSTRUCTIONS_EN.md)
