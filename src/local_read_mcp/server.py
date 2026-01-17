@@ -59,6 +59,172 @@ def generate_session_id(file_path: str, prefix: str = "session") -> str:
     return f"{prefix}_{file_hash}_{timestamp}"
 
 
+def fix_tool_arguments(tool_name: str, arguments: dict) -> dict:
+    """
+    Auto-fix common parameter name mistakes made by LLM.
+
+    This function automatically corrects common parameter naming errors that LLMs
+    make when calling tools, improving the success rate of tool calls.
+
+    Args:
+        tool_name: Name of the tool being called
+        arguments: Original arguments dictionary
+
+    Returns:
+        Fixed arguments dictionary with corrected parameter names
+
+    Examples:
+        >>> fix_tool_arguments("read_pdf", {"page": 1, "page_size": 5000})
+        {"chunk": 1, "chunk_size": 5000}
+
+        >>> fix_tool_arguments("read_pdf", {"filepath": "/path/to/file.pdf"})
+        {"file_path": "/path/to/file.pdf"}
+    """
+    fixed = arguments.copy()
+
+    # Historical parameter name compatibility (page -> chunk migration)
+    renames = {
+        "page": "chunk",
+        "page_size": "chunk_size",
+        "pagesize": "chunk_size",
+        "pages": "chunk",
+        # Common file path variations
+        "filepath": "file_path",
+        "path": "file_path",
+        "file": "file_path",
+        "filename": "file_path",
+        # Format variations
+        "format": "return_format",
+        "output_format": "return_format",
+        # Other common mistakes
+        "preview": "preview_only",
+        "metadata": "extract_metadata",
+        "sections": "extract_sections",
+        "tables": "extract_tables",
+    }
+
+    for old_name, new_name in renames.items():
+        if old_name in fixed and new_name not in fixed:
+            fixed[new_name] = fixed.pop(old_name)
+            logger.info(f"[Parameter Auto-Fix] {tool_name}: '{old_name}' → '{new_name}'")
+
+    return fixed
+
+
+class DuplicateDetector:
+    """
+    Detect duplicate document read requests to prevent infinite loops.
+
+    This class tracks document read requests per session and warns when the same
+    file+chunk combination is requested multiple times, which may indicate that
+    an agent is stuck in a loop.
+
+    Attributes:
+        max_repeats: Maximum number of times a chunk can be requested before warning
+        request_cache: Dictionary mapping session_id to file+chunk request counts
+    """
+
+    def __init__(self, max_repeats: int = 3):
+        """
+        Initialize the duplicate detector.
+
+        Args:
+            max_repeats: Maximum allowed repeats before warning (default: 3)
+        """
+        self.max_repeats = max_repeats
+        self.request_cache: Dict[str, Dict[str, int]] = {}
+
+    def check_and_record(
+        self,
+        session_id: str,
+        file_path: str,
+        chunk: int,
+        chunk_size: int
+    ) -> Optional[str]:
+        """
+        Check if this is a duplicate request and record it.
+
+        Args:
+            session_id: Session identifier
+            file_path: Path to the file being read
+            chunk: Chunk number being requested
+            chunk_size: Size of the chunk
+
+        Returns:
+            Warning message if duplicate detected, None otherwise
+
+        Examples:
+            >>> detector = DuplicateDetector(max_repeats=3)
+            >>> detector.check_and_record("sess1", "/file.pdf", 1, 10000)
+            None  # First request, no warning
+
+            >>> # After 3 more requests for the same chunk...
+            >>> detector.check_and_record("sess1", "/file.pdf", 1, 10000)
+            "Warning: This chunk has been requested 3 times..."
+        """
+        # Create cache key: file_path + chunk + chunk_size
+        cache_key = f"{file_path}:chunk{chunk}:size{chunk_size}"
+
+        # Initialize session cache if needed
+        if session_id not in self.request_cache:
+            self.request_cache[session_id] = {}
+
+        # Get current count
+        count = self.request_cache[session_id].get(cache_key, 0)
+
+        # Check if exceeded max repeats
+        if count >= self.max_repeats:
+            warning_msg = (
+                f"Warning: Chunk {chunk} of '{os.path.basename(file_path)}' has been "
+                f"requested {count} times in this session. You may be in a loop. "
+                f"Suggestions: (1) Check if has_more=False, (2) Try different chunk numbers, "
+                f"(3) Use preview_only=True to assess content first."
+            )
+            logger.warning(f"[Duplicate Detection] {warning_msg}")
+            # Still record the request
+            self.request_cache[session_id][cache_key] = count + 1
+            return warning_msg
+
+        # Record the request
+        self.request_cache[session_id][cache_key] = count + 1
+
+        # Log for debugging (only for repeat requests)
+        if count > 0:
+            logger.info(
+                f"[Duplicate Detection] Chunk {chunk} of '{os.path.basename(file_path)}' "
+                f"requested {count + 1} times in session {session_id[:8]}..."
+            )
+
+        return None
+
+    def clear_session(self, session_id: str):
+        """
+        Clear cache for a specific session.
+
+        Args:
+            session_id: Session identifier to clear
+        """
+        if session_id in self.request_cache:
+            del self.request_cache[session_id]
+            logger.info(f"[Duplicate Detection] Cleared session {session_id[:8]}...")
+
+    def get_session_stats(self, session_id: str) -> Dict[str, int]:
+        """
+        Get statistics for a session.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            Dictionary mapping cache keys to request counts
+        """
+        return self.request_cache.get(session_id, {}).copy()
+
+
+# Global duplicate detector instance
+duplicate_detector = DuplicateDetector(max_repeats=3)
+
+
 def create_simple_converter_wrapper(converter_func, converter_name: str = ""):
     """Create a wrapper for simple converters that don't support enhanced parameters.
 
@@ -137,6 +303,26 @@ async def process_document(
     """
     start_time = time.time()
 
+    # Generate session ID early for duplicate detection
+    if not session_id:
+        session_id = generate_session_id(file_path, prefix=converter_func.__name__.lower().replace('converter', ''))
+
+    # Normalize chunk parameters (handle None and invalid values)
+    if chunk is None or chunk < 1:
+        chunk = 1
+    if chunk_size is None or chunk_size < 1:
+        chunk_size = 10000
+
+    # Check for duplicate requests (prevent infinite loops)
+    duplicate_warning = None
+    if not preview_only:  # Skip detection for preview requests
+        duplicate_warning = duplicate_detector.check_and_record(
+            session_id=session_id,
+            file_path=file_path,
+            chunk=chunk,
+            chunk_size=chunk_size
+        )
+
     try:
         # Call converter function with appropriate kwargs
         result = converter_func(file_path, **converter_kwargs)
@@ -151,10 +337,6 @@ async def process_document(
             char_offset = offset
             char_limit = limit
         else:
-            if chunk is None or chunk < 1:
-                chunk = 1
-            if chunk_size is None or chunk_size < 1:
-                chunk_size = 10000
             char_offset = (chunk - 1) * chunk_size
             char_limit = chunk_size
 
@@ -167,10 +349,6 @@ async def process_document(
             total_lines = len(lines)
             if total_lines > preview_lines:
                 paginated_content = '\n'.join(lines[:preview_lines]) + f"\n\n... [Preview mode: showing first {preview_lines} of {total_lines} lines. Remove preview_only to read full content]"
-
-        # Generate session ID if not provided
-        if not session_id:
-            session_id = generate_session_id(file_path, prefix=converter_func.__name__.lower().replace('converter', ''))
 
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)
@@ -212,10 +390,22 @@ async def process_document(
                     f"or switch to return_format='text'."
                 )
 
+            # Add duplicate warning if detected
+            if duplicate_warning:
+                # Combine with existing warning if present
+                if "warning" in result_dict:
+                    result_dict["warning"] = f"{result_dict['warning']}\n\n{duplicate_warning}"
+                else:
+                    result_dict["warning"] = duplicate_warning
+
             return result_dict
         else:
             # Return text format with pagination hints
             result_text = paginated_content
+
+            # Add duplicate warning if detected
+            if duplicate_warning:
+                result_text = f"[{duplicate_warning}]\n\n{result_text}"
 
             # Add pagination hint if there's more content
             if has_more:
@@ -299,6 +489,24 @@ async def read_pdf(
         A dictionary containing the text content or error message.
         If return_format='json', returns enhanced structure with metadata, sections, pagination_info, pdf_pages, session_id.
     """
+    # Apply parameter auto-fix for common naming mistakes
+    local_vars = locals().copy()
+    fixed_params = fix_tool_arguments("read_pdf", local_vars)
+
+    # Extract fixed parameters
+    file_path = fixed_params.get("file_path", file_path)
+    chunk = fixed_params.get("chunk", chunk)
+    chunk_size = fixed_params.get("chunk_size", chunk_size)
+    offset = fixed_params.get("offset", offset)
+    limit = fixed_params.get("limit", limit)
+    extract_sections = fixed_params.get("extract_sections", extract_sections)
+    extract_tables = fixed_params.get("extract_tables", extract_tables)
+    extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
+    preview_only = fixed_params.get("preview_only", preview_only)
+    preview_lines = fixed_params.get("preview_lines", preview_lines)
+    session_id = fixed_params.get("session_id", session_id)
+    return_format = fixed_params.get("return_format", return_format)
+
     start_time = time.time()
 
     # Helper functions
@@ -547,6 +755,23 @@ async def read_word(
         A dictionary containing the text content or error message.
         If return_format='json', returns enhanced structure with metadata, sections, etc.
     """
+    # Apply parameter auto-fix for common naming mistakes
+    local_vars = locals().copy()
+    fixed_params = fix_tool_arguments("read_word", local_vars)
+
+    # Extract fixed parameters
+    file_path = fixed_params.get("file_path", file_path)
+    chunk = fixed_params.get("chunk", chunk)
+    chunk_size = fixed_params.get("chunk_size", chunk_size)
+    offset = fixed_params.get("offset", offset)
+    limit = fixed_params.get("limit", limit)
+    extract_sections = fixed_params.get("extract_sections", extract_sections)
+    extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
+    preview_only = fixed_params.get("preview_only", preview_only)
+    preview_lines = fixed_params.get("preview_lines", preview_lines)
+    session_id = fixed_params.get("session_id", session_id)
+    return_format = fixed_params.get("return_format", return_format)
+
     return await process_document(
         file_path=file_path,
         converter_func=DocxConverter,
@@ -608,6 +833,23 @@ async def read_excel(
         A dictionary containing the text content or error message.
         If return_format='json', returns enhanced structure with metadata, tables, etc.
     """
+    # Apply parameter auto-fix for common naming mistakes
+    local_vars = locals().copy()
+    fixed_params = fix_tool_arguments("read_excel", local_vars)
+
+    # Extract fixed parameters
+    file_path = fixed_params.get("file_path", file_path)
+    chunk = fixed_params.get("chunk", chunk)
+    chunk_size = fixed_params.get("chunk_size", chunk_size)
+    offset = fixed_params.get("offset", offset)
+    limit = fixed_params.get("limit", limit)
+    extract_tables = fixed_params.get("extract_tables", extract_tables)
+    extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
+    preview_only = fixed_params.get("preview_only", preview_only)
+    preview_lines = fixed_params.get("preview_lines", preview_lines)
+    session_id = fixed_params.get("session_id", session_id)
+    return_format = fixed_params.get("return_format", return_format)
+
     return await process_document(
         file_path=file_path,
         converter_func=XlsxConverter,
@@ -671,6 +913,24 @@ async def read_powerpoint(
         A dictionary containing the text content or error message.
         If return_format='json', returns enhanced structure with metadata, sections, etc.
     """
+    # Apply parameter auto-fix for common naming mistakes
+    local_vars = locals().copy()
+    fixed_params = fix_tool_arguments("read_powerpoint", local_vars)
+
+    # Extract fixed parameters
+    file_path = fixed_params.get("file_path", file_path)
+    chunk = fixed_params.get("chunk", chunk)
+    chunk_size = fixed_params.get("chunk_size", chunk_size)
+    offset = fixed_params.get("offset", offset)
+    limit = fixed_params.get("limit", limit)
+    extract_sections = fixed_params.get("extract_sections", extract_sections)
+    extract_tables = fixed_params.get("extract_tables", extract_tables)
+    extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
+    preview_only = fixed_params.get("preview_only", preview_only)
+    preview_lines = fixed_params.get("preview_lines", preview_lines)
+    session_id = fixed_params.get("session_id", session_id)
+    return_format = fixed_params.get("return_format", return_format)
+
     # Create a wrapper for PptxConverter to support new parameters
     def pptx_converter_wrapper(file_path: str, **kwargs) -> DocumentConverterResult:
         # PptxConverter currently doesn't support extract_metadata, extract_sections, extract_tables
