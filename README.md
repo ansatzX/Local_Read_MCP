@@ -31,7 +31,7 @@ uv pip install -e .
 
 ### 2. Configure Claude Code
 
-Edit `~/.config/claude-code-desktop/claude_code_mcp_servers.json` (macOS/Linux) or `%APPDATA%\claude-code-desktop\claude_code_mcp_servers.json` (Windows).
+Edit `~/`claude `/claude-code-desktop/settings.json` .
 
 **Note**: Claude Code supports both array format (`"mcpServers": [{ ... }]`) and object format (`"mcpServers": { "Local_Read": { ... } }`).
 
