@@ -40,10 +40,10 @@ async def read_pdf(file_path: str) -> Dict[str, Any]:
     """Read and convert a PDF file to markdown text.
 
     Args:
-        file_path: The path to PDF file to
+        file_path: The path to the PDF file to read
 
     Returns:
-        A dictionary containing to text content or error message.
+        A dictionary containing the text content or error message.
     """
     try:
         result = PdfConverter(file_path)
@@ -67,10 +67,10 @@ async def read_word(file_path: str) -> Dict[str, Any]:
     """Read and convert a Word document (.docx or .doc) to markdown.
 
     Args:
-        file_path: The path to the Word document to
+        file_path: The path to the Word document to read
 
     Returns:
-        A dictionary containing to markdown content or error message.
+        A dictionary containing the markdown content or error message.
     """
     try:
         result = DocxConverter(file_path)
@@ -94,10 +94,10 @@ async def read_excel(file_path: str) -> Dict[str, Any]:
     """Read and convert an Excel file (.xlsx or .xls) to markdown table format.
 
     Args:
-        file_path: The path to the Excel file to
+        file_path: The path to the Excel file to read
 
     Returns:
-        A dictionary containing to markdown table content or error message.
+        A dictionary containing the markdown table content or error message.
     """
     try:
         result = XlsxConverter(file_path)
@@ -121,10 +121,10 @@ async def read_powerpoint(file_path: str) -> Dict[str, Any]:
     """Read and convert a PowerPoint presentation (.pptx or .ppt) to markdown.
 
     Args:
-        file_path: The path to the PowerPoint file to
+        file_path: The path to the PowerPoint file to read
 
     Returns:
-        A dictionary containing to markdown content or error message.
+        A dictionary containing the markdown content or error message.
     """
     try:
         result = PptxConverter(file_path)
@@ -148,10 +148,10 @@ async def read_html(file_path: str) -> Dict[str, Any]:
     """Read and convert an HTML file to markdown.
 
     Args:
-        file_path: The path to the HTML file to
+        file_path: The path to the HTML file to read
 
     Returns:
-        A dictionary containing to markdown content or error message.
+        A dictionary containing the markdown content or error message.
     """
     try:
         result = HtmlConverter(file_path)
@@ -175,10 +175,10 @@ async def read_text(file_path: str) -> Dict[str, Any]:
     """Read a plain text file (.txt, .md, .py, .sh, etc.).
 
     Args:
-        file_path: The path to the text file to
+        file_path: The path to the text file to read
 
     Returns:
-        A dictionary containing to text content.
+        A dictionary containing the text content.
     """
     try:
         result = TextConverter(file_path)
@@ -202,10 +202,10 @@ async def read_json(file_path: str) -> Dict[str, Any]:
     """Read and parse a JSON file.
 
     Args:
-        file_path: The path to the JSON file to
+        file_path: The path to the JSON file to read
 
     Returns:
-        A dictionary containing to formatted JSON content or error message.
+        A dictionary containing the formatted JSON content or error message.
     """
     try:
         result = JsonConverter(file_path)
@@ -229,10 +229,10 @@ async def read_csv(file_path: str) -> Dict[str, Any]:
     """Read a CSV file as markdown table.
 
     Args:
-        file_path: The path to the CSV file to
+        file_path: The path to the CSV file to read
 
     Returns:
-        A dictionary containing to markdown table content or error message.
+        A dictionary containing the markdown table content or error message.
     """
     try:
         result = CsvConverter(file_path)
@@ -256,10 +256,10 @@ async def read_yaml(file_path: str) -> Dict[str, Any]:
     """Read and parse a YAML file (.yaml or .yml).
 
     Args:
-        file_path: The path to the YAML file to
+        file_path: The path to the YAML file to read
 
     Returns:
-        A dictionary containing to formatted YAML content or error message.
+        A dictionary containing the formatted YAML content or error message.
     """
     try:
         result = YamlConverter(file_path)
@@ -283,10 +283,10 @@ async def read_zip(file_path: str) -> Dict[str, Any]:
     """Extract and list contents of a ZIP archive.
 
     Args:
-        file_path: The path to the ZIP file to
+        file_path: The path to the ZIP file to read
 
     Returns:
-        A dictionary containing to file listing and contents or error message.
+        A dictionary containing the file listing and contents or error message.
     """
     try:
         result = ZipConverter(file_path)
@@ -313,10 +313,10 @@ async def read_with_markitdown(uri: str) -> Dict[str, Any]:
     and other document types using MarkItDown's plugins.
 
     Args:
-        uri: The path or URI to the file to
+        uri: The path or URI to the file to convert
 
     Returns:
-        A dictionary containing to converted markdown content or error message.
+        A dictionary containing the converted markdown content or error message.
     """
     try:
         result = MarkItDownConverter(uri)

@@ -220,3 +220,5 @@ data/
 .DS_Store
 
 apps/collect-trace/scripts/*/*.sh
+
+uv.lock

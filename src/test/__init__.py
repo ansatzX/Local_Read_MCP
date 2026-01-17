@@ -1,0 +1,1 @@
+# Test package for local_read_mcp

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Local Read MCP Server** is a Model Context Protocol server for processing various file formats locally without requiring external API keys or cloud services. It converts binary document formats (PDF, Word, Excel, PowerPoint, etc.) to readable markdown/text format.
+**Local Read MCP Server** processes various file formats locally without external APIs. Converts binary documents (PDF, Word, Excel, PowerPoint, etc.) to readable markdown/text.
 
 ## Project Structure
 
@@ -12,58 +12,62 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 local_read_mcp/
 ├── src/local_read_mcp/
 │   ├── __init__.py          # Package initialization
-│   ├── server.py            # MCP server implementation (11096 lines)
-│   └── converters.py        # Document converter classes (30445 lines)
-├── pyproject.toml           # Python project configuration
-├── README.md                # Comprehensive documentation
-├── example_usage.py         # Example client usage
+│   ├── server.py            # MCP server implementation (406 lines)
+│   └── converters.py        # Document converter classes (842 lines)
+├── pyproject.toml           # Python project configuration (requires uv)
+├── README.md                # Documentation
+├── example_usage.py         # Client usage example
 └── LICENSE                  # MIT License
 ```
 
 ## Development Commands
 
-### Dependency Management
-
-The project uses `hatchling` as the build system with `pyproject.toml`:
-
+### Dependency Management (uv required)
 ```bash
-# Install dependencies (using pip)
-pip install mcp fastmcp mammoth markdownify openpyxl pdfminer-six python-pptx markitdown pyyaml
-
-# Or using uv
-uv pip install mcp fastmcp mammoth markdownify openpyxl pdfminer-six python-pptx markitdown pyyaml
+# Install in development mode (recommended)
+uv pip install -e .
 
 # Install development dependencies
-uv pip install "pytest>=8.4.1" "pytest-asyncio>=1.0.0"
+uv pip install -e ".[dev]"
 ```
 
-### Running the Server
+**Important**: This project uses uv-specific dependency groups. Using standard `pip` may fail.
 
+### Makefile Commands
 ```bash
-# Standard I/O transport (default for MCP)
-python -m local_read_mcp.server
-
-# HTTP transport
-python -m local_read_mcp.server --transport http --port 8080
+make install       # Production dependencies
+make install-dev   # Development dependencies (includes pytest)
+make test          # Run all tests
+make format        # Format code with ruff
+make lint          # Lint code with ruff
+make check         # Format and lint (pre-commit check)
+make run           # Run MCP server (stdio transport)
+make run-http      # Run MCP server (HTTP transport, port 8080)
+make clean         # Clean build artifacts
 ```
 
-### Testing
-
-Tests are configured to run from `src/test/` directory:
-
+### Running Tests
 ```bash
-# Run tests with pytest
+# Run all tests
 pytest src/test/
 
-# Run tests with coverage
+# Run specific test file
+uv run pytest src/test/test_server.py -v
+
+# Run specific test function
+uv run pytest src/test/test_server.py::test_server_import -v
+
+# Run with coverage
 pytest src/test/ --cov=local_read_mcp --cov-report=term-missing
 ```
+
+### UV Lock File
+The `uv.lock` file ensures reproducible dependency installations. **Do not edit manually** - it updates automatically via `uv pip install` commands.
 
 ## Architecture
 
 ### MCP Server Implementation
-
-The server is built using `FastMCP` framework and provides 12 tools for document processing:
+Built using `FastMCP` framework with 12 document processing tools:
 
 1. **Format-specific converters**: `read_pdf()`, `read_word()`, `read_excel()`, `read_powerpoint()`, `read_html()`
 2. **Text/data converters**: `read_text()`, `read_json()`, `read_csv()`, `read_yaml()`
@@ -72,48 +76,52 @@ The server is built using `FastMCP` framework and provides 12 tools for document
 5. **Utility**: `get_supported_formats()`
 
 ### Converter System
-
-The converter architecture follows a modular design:
-
-- **Base converter pattern**: Each format has a dedicated converter class in `converters.py`
+- **Modular design**: Each format has a dedicated converter class in `converters.py`
 - **Error resilience**: Graceful degradation with fallback to `MarkItDownConverter`
 - **Local processing**: No external API dependencies
 - **Markdown output**: All formats convert to markdown for LLM compatibility
 
 **Key converter classes**:
 - `PdfConverter` - Uses `pdfminer-six` for text extraction
-- `DocxConverter` - Uses `mammoth` for Word to HTML, then to markdown
+- `DocxConverter` - Uses `mammoth` for Word to HTML → markdown
 - `XlsxConverter` - Uses `openpyxl` for Excel to markdown tables
 - `PptxConverter` - Uses `python-pptx` for PowerPoint presentations
 - `HtmlConverter` - Uses `markdownify` with custom enhancements
 - `MarkItDownConverter` - Universal fallback via `markitdown` library
 
-### Integration with Claude Code
+## Claude Code Integration
 
-**MCP Configuration**:
+### Basic Configuration
+Add to `~/.config/claude-code-desktop/claude_code_mcp_servers.json`:
 ```json
 {
   "mcpServers": [
     {
-      "command": "python",
-      "args": ["-m", "local_read_mcp.server"]
+      "command": "uv",
+      "args": [
+        "--directory", "/path/to/Local_Read_MCP",
+        "run",
+        "--with", "local_read_mcp",
+        "python", "-m", "local_read_mcp.server"
+      ]
     }
   ]
 }
 ```
+Replace `/path/to/Local_Read_MCP` with the actual repository path.
 
-**File Processing Priority**:
+### File Processing Priority
+Claude Code automatically uses:
 1. **MCP tools** for binary formats (PDF, Word, Excel, PowerPoint, ZIP, etc.)
-2. **Built-in Read Tool** as fallback for plain text files
+2. **Read Tool** for plain text files (.txt, .md, .py, .sh)
 
-**Important**: Binary files supported by `local_read_mcp` are processed locally without using the Read Tool, ensuring proper format conversion (PDF to text, Excel to markdown tables, etc.) rather than raw binary content.
+**Important**: Binary files are processed locally without using the Read Tool, ensuring proper format conversion rather than raw binary content.
 
-## Supported Formats
-
-**Documents**: PDF (.pdf), Word (.docx, .doc), Excel (.xlsx, .xls), PowerPoint (.pptx, .ppt), HTML (.html, .htm)
-**Text/Data**: Plain text (.txt, .md, .py, .sh, etc.), JSON (.json), YAML (.yaml, .yml), CSV (.csv), TOML (.toml)
-**Archives**: ZIP (.zip) - lists contents only
-**Fallback**: MarkItDown - supports many additional formats via plugins
+### Optimizing Claude Code Instructions
+Add to Claude Code custom instructions:
+```
+When processing files, always prefer using available MCP tools for binary formats (PDF, Word, Excel, PowerPoint, ZIP, etc.) instead of the Read tool. This provides better formatted output with proper structure (markdown tables, section headers, etc.). For plain text files (.txt, .md, .py, .sh), the Read Tool is appropriate.
+```
 
 ## Key Design Decisions
 
@@ -126,7 +134,6 @@ The converter architecture follows a modular design:
 ## Development Notes
 
 - **Python 3.12+** required (specified in `pyproject.toml`)
-- **Async/await pattern**: All tools are async functions for better performance
+- **Async/await pattern**: All tools are async functions
 - **Error handling**: Comprehensive try-catch with logging in each tool
-- **No external services**: All processing is local; no API keys required
 - **Test configuration**: Uses `pytest-asyncio` for async test support
