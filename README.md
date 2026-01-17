@@ -300,15 +300,27 @@ Copy the content from [CUSTOM_INSTRUCTIONS_CN.md](./CUSTOM_INSTRUCTIONS_CN.md) (
 ```markdown
 ## 文档处理规则
 
-读取二进制文档文件(PDF、Word、Excel、PowerPoint、HTML、ZIP等)时,始终使用MCP工具,而不是Read工具。Read工具只适用于纯文本文件(.txt、.md、.py、.sh、.log等)。
+读取文档文件时,**必须严格遵循以下规则**:
 
-MCP工具自动处理:
-- 格式转换为markdown
-- 学术论文LaTeX公式修复
-- 大文件分页
-- 结构化数据提取
+### 必须使用的MCP工具
 
-每个MCP工具的描述中都包含详细的使用策略指导。
+- PDF文件 -> 使用 `read_pdf` 工具
+- Word文档 -> 使用 `read_word` 工具
+- Excel表格 -> 使用 `read_excel` 工具
+- PowerPoint -> 使用 `read_powerpoint` 工具
+- HTML文件 -> 使用 `read_html` 工具
+- ZIP压缩包 -> 使用 `read_zip` 工具
+
+### 严格禁止
+
+- **绝对不要**使用Read工具读取上述二进制文件(会得到乱码)
+- **绝对不要**尝试其他读取方式
+
+### Read工具的正确用途
+
+Read工具仅适用于纯文本文件(.txt、.md、.py、.sh、.log等)。
+
+MCP工具自动处理LaTeX公式修复、分页、结构化提取等功能。每个工具的描述包含详细使用策略。
 ```
 
 ### Simple Version - English (极简版 - 英文)
@@ -316,15 +328,27 @@ MCP工具自动处理:
 ```markdown
 ## Document Processing Rule
 
-When reading binary document files (PDF, Word, Excel, PowerPoint, HTML, ZIP, etc.), always use MCP tools instead of the Read tool. The Read tool only works for plain text files (.txt, .md, .py, .sh, .log, etc.).
+When reading document files, **strictly follow these rules**:
 
-MCP tools automatically handle:
-- Format-specific conversion to markdown
-- LaTeX formula fixing for academic papers
-- Pagination for large files
-- Structured data extraction
+### Required MCP Tools
 
-Each MCP tool includes detailed usage strategies in its description to guide optimal usage.
+- PDF files -> Use `read_pdf` tool
+- Word documents -> Use `read_word` tool
+- Excel spreadsheets -> Use `read_excel` tool
+- PowerPoint -> Use `read_powerpoint` tool
+- HTML files -> Use `read_html` tool
+- ZIP archives -> Use `read_zip` tool
+
+### Strictly Prohibited
+
+- **NEVER** use Read tool for above binary files (results in garbled output)
+- **NEVER** attempt other reading methods
+
+### Correct Use of Read Tool
+
+Read tool is ONLY for plain text files (.txt, .md, .py, .sh, .log, etc.).
+
+MCP tools automatically handle LaTeX formula fixing, pagination, structured extraction, etc. Each tool's description includes detailed usage strategies.
 ```
 
 ---

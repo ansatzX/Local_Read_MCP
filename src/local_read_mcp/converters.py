@@ -1032,6 +1032,20 @@ def PdfConverter(
         # Extract text content
         text_content = pdfminer.high_level.extract_text(local_path)
 
+        # Get PDF page count
+        pdf_page_count = None
+        try:
+            from pdfminer.pdfparser import PDFParser
+            from pdfminer.pdfdocument import PDFDocument
+            from pdfminer.pdfpage import PDFPage
+
+            with open(local_path, 'rb') as fp:
+                parser = PDFParser(fp)
+                document = PDFDocument(parser)
+                pdf_page_count = len(list(PDFPage.create_pages(document)))
+        except Exception as e:
+            logger.warning(f"Could not extract PDF page count: {e}")
+
         # Apply LaTeX fixes if requested
         if fix_latex:
             text_content = fix_latex_formulas(text_content)
@@ -1048,7 +1062,8 @@ def PdfConverter(
                 "file_path": local_path,
                 "file_size": os.path.getsize(local_path) if os.path.exists(local_path) else None,
                 "file_extension": os.path.splitext(local_path)[1],
-                "conversion_timestamp": time.time()
+                "conversion_timestamp": time.time(),
+                "pdf_page_count": pdf_page_count,  # Add actual PDF page count
             }
 
         if extract_sections:

@@ -101,8 +101,8 @@ async def process_document(
     file_path: str,
     converter_func,
     converter_kwargs: Dict[str, Any],
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -114,16 +114,16 @@ async def process_document(
     return_format: Optional[str] = "text"
 ) -> Dict[str, Any]:
     """
-    Unified document processing with pagination, session management, and structured extraction.
+    Unified document processing with chunked pagination, session management, and structured extraction.
 
     Args:
         file_path: Path to the file
         converter_func: Converter function to use
         converter_kwargs: Keyword arguments to pass to converter function
-        page: Page number for pagination (1-indexed)
-        page_size: Number of characters per page
-        offset: Character offset (alternative to page)
-        limit: Character limit (alternative to page_size)
+        chunk: Chunk number for pagination (1-indexed)
+        chunk_size: Number of characters per chunk
+        offset: Character offset (alternative to chunk)
+        limit: Character limit (alternative to chunk_size)
         extract_sections: Whether to extract document sections/headings
         extract_tables: Whether to extract tables
         extract_metadata: Whether to extract metadata
@@ -151,22 +151,22 @@ async def process_document(
             char_offset = offset
             char_limit = limit
         else:
-            if page is None or page < 1:
-                page = 1
-            if page_size is None or page_size < 1:
-                page_size = 10000
-            char_offset = (page - 1) * page_size
-            char_limit = page_size
+            if chunk is None or chunk < 1:
+                chunk = 1
+            if chunk_size is None or chunk_size < 1:
+                chunk_size = 10000
+            char_offset = (chunk - 1) * chunk_size
+            char_limit = chunk_size
 
         # Apply pagination
         paginated_content, has_more = apply_pagination(full_content, char_offset, char_limit)
 
-        # Apply preview if requested
+        # Apply preview if requested (does not affect has_more flag)
         if preview_only:
             lines = paginated_content.split('\n')
-            if len(lines) > preview_lines:
-                paginated_content = '\n'.join(lines[:preview_lines]) + f"\n\n... [Preview: showing first {preview_lines} of {len(lines)} lines]"
-                has_more = False
+            total_lines = len(lines)
+            if total_lines > preview_lines:
+                paginated_content = '\n'.join(lines[:preview_lines]) + f"\n\n... [Preview mode: showing first {preview_lines} of {total_lines} lines. Remove preview_only to read full content]"
 
         # Generate session ID if not provided
         if not session_id:
@@ -177,7 +177,10 @@ async def process_document(
 
         # Prepare result based on return format
         if return_format.lower() == "json":
-            return {
+            sections_list = result.sections if extract_sections else []
+            tables_list = result.tables if extract_tables else []
+
+            result_dict = {
                 "success": True,
                 "text": paginated_content,
                 "content": paginated_content,  # Keep for compatibility
@@ -186,26 +189,49 @@ async def process_document(
                     "file_path": file_path,
                     "file_size": os.path.getsize(file_path) if os.path.exists(file_path) else None,
                 }} if extract_metadata else {},
-                "sections": result.sections if extract_sections else [],
-                "tables": result.tables if extract_tables else [],
+                "sections": sections_list,
+                "tables": tables_list,
                 "pagination_info": {
-                    "total_pages": max(1, (len(full_content) + char_limit - 1) // char_limit) if char_limit else 1,
-                    "current_page": page if offset is None else None,
-                    "page_size": char_limit,
+                    "current_chunk": chunk if offset is None else None,
+                    "total_chunks": max(1, (len(full_content) + char_limit - 1) // char_limit) if char_limit else 1,
+                    "chunk_size": char_limit,
                     "has_more": has_more,
                     "char_offset": char_offset,
                     "char_limit": char_limit,
+                    "total_chars": len(full_content),
                 },
                 "session_id": session_id,
                 "processing_time_ms": processing_time_ms,
             }
+
+            # Check if response might be too large for token limits
+            if len(sections_list) > 30 or len(tables_list) > 20 or (len(paginated_content) > 8000 and (len(sections_list) > 0 or len(tables_list) > 0)):
+                result_dict["warning"] = (
+                    f"Large response with {len(sections_list)} sections and {len(tables_list)} tables. "
+                    f"If you encounter token limit errors, try using smaller chunk_size (5000-8000) "
+                    f"or switch to return_format='text'."
+                )
+
+            return result_dict
         else:
-            # Return text format (backward compatible)
+            # Return text format with pagination hints
+            result_text = paginated_content
+
+            # Add pagination hint if there's more content
+            if has_more:
+                total_chars = len(full_content)
+                current_end = char_offset + len(paginated_content)
+                total_chunks = max(1, (total_chars + char_limit - 1) // char_limit)
+                result_text += f"\n\n[Chunk {chunk}/{total_chunks}: Characters {char_offset:,}-{current_end:,} of {total_chars:,}. Continue with chunk={chunk + 1}]"
+
             return {
                 "success": True,
-                "text": paginated_content,
-                "content": paginated_content,
+                "text": result_text,
+                "content": result_text,
                 "title": result.title,
+                "has_more": has_more,
+                "total_chars": len(full_content),
+                "current_chunk": chunk if offset is None else None,
             }
 
     except Exception as e:
@@ -230,8 +256,8 @@ async def process_document(
 @mcp.tool()
 async def read_pdf(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -246,28 +272,32 @@ async def read_pdf(
 
     USAGE STRATEGY:
     - For unknown file size: Start with preview_only=True, preview_lines=100 to assess content
-    - For large files (>10k chars): Use pagination with page=1, page_size=10000
-    - For detailed analysis: Enable extract_sections=True, extract_metadata=True, return_format="json"
+    - For normal reading: Use chunk=1, chunk_size=10000 (default)
+    - For structured extraction (extract_sections=True, return_format="json"): Use smaller chunk_size=5000-8000 to avoid token limits
     - For academic papers: LaTeX formulas are automatically fixed (CID placeholders, Greek letters, math symbols)
-    - For multi-page reading: Reuse session_id from previous response for better performance
+    - For multi-chunk reading: Reuse session_id from previous response for better performance
+    - IMPORTANT: Both text and json formats include has_more flag and pagination info
+    - When has_more=True, continue reading with chunk=chunk+1 until has_more=False
+    - Note: "chunk" parameter divides content by character count, "pdf_pages" shows actual PDF page count
+    - WARNING: Large chunk_size (>10k) with extract_sections=True may exceed token limits in JSON format
 
     Args:
         file_path: The path to the PDF file to read
-        page: Page number for pagination (1-indexed). Default: 1.
-        page_size: Number of characters per page. Default: 10000.
-        offset: Character offset (alternative to page). If specified, overrides page.
-        limit: Character limit (alternative to page_size). If specified, overrides page_size.
+        chunk: Chunk number for content pagination (1-indexed). Default: 1.
+        chunk_size: Number of characters per chunk. Default: 10000.
+        offset: Character offset (alternative to chunk). If specified, overrides chunk.
+        limit: Character limit (alternative to chunk_size). If specified, overrides chunk_size.
         extract_sections: Extract document sections/headings. Use for structured documents. Default: False.
         extract_tables: Extract table information. Default: False.
-        extract_metadata: Extract file metadata (size, path, timestamp). Use with return_format="json". Default: False.
+        extract_metadata: Extract file metadata (size, path, timestamp, PDF pages). Use with return_format="json". Default: False.
         preview_only: Return only first N lines without full conversion. Use for quick assessment. Default: False.
         preview_lines: Number of lines for preview mode. Default: 100.
-        session_id: Session ID for resuming pagination. Reuse for consecutive page requests.
+        session_id: Session ID for resuming pagination. Reuse for consecutive chunk requests.
         return_format: Output format: 'json' (structured with metadata/sections) or 'text' (plain). Default: 'text'.
 
     Returns:
         A dictionary containing the text content or error message.
-        If return_format='json', returns enhanced structure with metadata, sections, pagination_info, session_id.
+        If return_format='json', returns enhanced structure with metadata, sections, pagination_info, pdf_pages, session_id.
     """
     start_time = time.time()
 
@@ -347,9 +377,12 @@ async def read_pdf(
         return sections
 
     try:
-        # Get full content from converter
-        result = PdfConverter(file_path)
+        # Get full content from converter (always extract metadata to get PDF page count)
+        result = PdfConverter(file_path, extract_metadata=True)
         full_content = result.text_content
+
+        # Get PDF page count from metadata
+        pdf_page_count = result.metadata.get("pdf_page_count") if result.metadata else None
 
         # Apply LaTeX fixes
         fixed_content = fix_latex_formulas(full_content)
@@ -359,22 +392,22 @@ async def read_pdf(
             char_offset = offset
             char_limit = limit
         else:
-            if page is None or page < 1:
-                page = 1
-            if page_size is None or page_size < 1:
-                page_size = 10000
-            char_offset = (page - 1) * page_size
-            char_limit = page_size
+            if chunk is None or chunk < 1:
+                chunk = 1
+            if chunk_size is None or chunk_size < 1:
+                chunk_size = 10000
+            char_offset = (chunk - 1) * chunk_size
+            char_limit = chunk_size
 
         # Apply pagination
         paginated_content, has_more = apply_pagination(fixed_content, char_offset, char_limit)
 
-        # Apply preview if requested
+        # Apply preview if requested (does not affect has_more flag)
         if preview_only:
             lines = paginated_content.split('\n')
-            if len(lines) > preview_lines:
-                paginated_content = '\n'.join(lines[:preview_lines]) + f"\n\n... [Preview: showing first {preview_lines} of {len(lines)} lines]"
-                has_more = False
+            total_lines = len(lines)
+            if total_lines > preview_lines:
+                paginated_content = '\n'.join(lines[:preview_lines]) + f"\n\n... [Preview mode: showing first {preview_lines} of {total_lines} lines. Remove preview_only to read full content]"
 
         # Extract structured data if requested
         metadata = {}
@@ -386,6 +419,7 @@ async def read_pdf(
                 "title": result.title,
                 "file_path": file_path,
                 "file_size": os.path.getsize(file_path) if os.path.exists(file_path) else None,
+                "pdf_page_count": pdf_page_count,
             }
 
         if extract_sections:
@@ -401,7 +435,7 @@ async def read_pdf(
 
         # Prepare result based on return format
         if return_format.lower() == "json":
-            return {
+            result_dict = {
                 "success": True,
                 "text": paginated_content,
                 "content": paginated_content,  # Keep for compatibility
@@ -410,23 +444,49 @@ async def read_pdf(
                 "sections": sections,
                 "tables": tables,
                 "pagination_info": {
-                    "total_pages": max(1, (len(fixed_content) + char_limit - 1) // char_limit) if char_limit else 1,
-                    "current_page": page if offset is None else None,
-                    "page_size": char_limit,
+                    "current_chunk": chunk if offset is None else None,
+                    "total_chunks": max(1, (len(fixed_content) + char_limit - 1) // char_limit) if char_limit else 1,
+                    "chunk_size": char_limit,
                     "has_more": has_more,
                     "char_offset": char_offset,
                     "char_limit": char_limit,
+                    "total_chars": len(fixed_content),
                 },
+                "pdf_pages": pdf_page_count,  # Actual PDF page count (separate from chunk pagination)
                 "session_id": session_id,
                 "processing_time_ms": processing_time_ms,
             }
+
+            # Check if response might be too large for token limits
+            if len(sections) > 30 or (len(paginated_content) > 8000 and len(sections) > 0):
+                result_dict["warning"] = (
+                    f"Large response with {len(sections)} sections. "
+                    f"If you encounter token limit errors, try using smaller chunk_size (5000-8000) "
+                    f"or switch to return_format='text'."
+                )
+
+            return result_dict
         else:
-            # Return text format (backward compatible)
+            # Return text format with pagination hints
+            result_text = paginated_content
+
+            # Add pagination hint if there's more content
+            if has_more:
+                total_chars = len(fixed_content)
+                current_end = char_offset + len(paginated_content)
+                total_chunks = max(1, (total_chars + char_limit - 1) // char_limit)
+                pdf_info = f" | PDF: {pdf_page_count} pages" if pdf_page_count else ""
+                result_text += f"\n\n[Chunk {chunk}/{total_chunks}: Characters {char_offset:,}-{current_end:,} of {total_chars:,}{pdf_info}. Continue with chunk={chunk + 1}]"
+
             return {
                 "success": True,
-                "text": paginated_content,
-                "content": paginated_content,
+                "text": result_text,
+                "content": result_text,
                 "title": result.title,
+                "has_more": has_more,
+                "total_chars": len(fixed_content),
+                "current_chunk": chunk if offset is None else None,
+                "pdf_pages": pdf_page_count,
             }
 
     except Exception as e:
@@ -451,8 +511,8 @@ async def read_pdf(
 @mcp.tool()
 async def read_word(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -494,8 +554,8 @@ async def read_word(
             "extract_metadata": extract_metadata,
             "extract_sections": extract_sections,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=extract_sections,
@@ -511,8 +571,8 @@ async def read_word(
 @mcp.tool()
 async def read_excel(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_tables: Optional[bool] = False,
@@ -555,8 +615,8 @@ async def read_excel(
             "extract_metadata": extract_metadata,
             "extract_tables": extract_tables,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=False,  # Excel doesn't have sections
@@ -572,8 +632,8 @@ async def read_excel(
 @mcp.tool()
 async def read_powerpoint(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -644,8 +704,8 @@ async def read_powerpoint(
             "extract_sections": extract_sections,
             "extract_tables": extract_tables,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=extract_sections,
@@ -661,8 +721,8 @@ async def read_powerpoint(
 @mcp.tool()
 async def read_html(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -707,8 +767,8 @@ async def read_html(
             "extract_metadata": extract_metadata,
             "extract_sections": extract_sections,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=extract_sections,
@@ -724,8 +784,8 @@ async def read_html(
 @mcp.tool()
 async def read_text(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -793,8 +853,8 @@ async def read_text(
             "extract_sections": extract_sections,
             "extract_tables": extract_tables,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=extract_sections,
@@ -810,8 +870,8 @@ async def read_text(
 @mcp.tool()
 async def read_json(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -881,8 +941,8 @@ async def read_json(
             "extract_sections": extract_sections,
             "extract_tables": extract_tables,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=extract_sections,
@@ -898,8 +958,8 @@ async def read_json(
 @mcp.tool()
 async def read_csv(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -943,8 +1003,8 @@ async def read_csv(
             "extract_sections": extract_sections,
             "extract_tables": extract_tables,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=extract_sections,
@@ -960,8 +1020,8 @@ async def read_csv(
 @mcp.tool()
 async def read_yaml(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -1005,8 +1065,8 @@ async def read_yaml(
             "extract_sections": extract_sections,
             "extract_tables": extract_tables,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=extract_sections,
@@ -1022,8 +1082,8 @@ async def read_yaml(
 @mcp.tool()
 async def read_zip(
     file_path: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -1090,8 +1150,8 @@ async def read_zip(
             "extract_sections": extract_sections,
             "extract_tables": extract_tables,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=extract_sections,
@@ -1107,8 +1167,8 @@ async def read_zip(
 @mcp.tool()
 async def read_with_markitdown(
     uri: str,
-    page: Optional[int] = 1,
-    page_size: Optional[int] = 10000,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     extract_sections: Optional[bool] = False,
@@ -1177,8 +1237,8 @@ async def read_with_markitdown(
             "extract_sections": extract_sections,
             "extract_tables": extract_tables,
         },
-        page=page,
-        page_size=page_size,
+        chunk=chunk,
+        chunk_size=chunk_size,
         offset=offset,
         limit=limit,
         extract_sections=extract_sections,
