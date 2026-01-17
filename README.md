@@ -278,18 +278,61 @@ MIT License
 
 ## Claude Code Custom Instructions
 
-This section provides optimized custom instructions for Claude Code in both Chinese and English. These instructions help Claude Code automatically use the correct MCP tools for document processing.
+This section provides custom instructions for Claude Code in two versions:
+
+1. **Simple Version (Recommended)**: Minimal instruction that relies on MCP tool descriptions for detailed strategies
+2. **Detailed Version**: Complete processing strategies in separate files
 
 ### How to Use
 
-Copy the content from [CUSTOM_INSTRUCTIONS_CN.md](./CUSTOM_INSTRUCTIONS_CN.md) (Chinese) or [CUSTOM_INSTRUCTIONS_EN.md](./CUSTOM_INSTRUCTIONS_EN.md) (English) and paste it in UI.
+**Option 1: Simple Version (Recommended)**
+
+Copy the appropriate version below and paste it in Claude Code UI. This lightweight approach leverages the detailed usage strategies built into each MCP tool's description.
+
+**Option 2: Detailed Version**
+
+Copy the content from [CUSTOM_INSTRUCTIONS_CN.md](./CUSTOM_INSTRUCTIONS_CN.md) (Chinese) or [CUSTOM_INSTRUCTIONS_EN.md](./CUSTOM_INSTRUCTIONS_EN.md) (English) and paste it in Claude Code UI. This comprehensive approach includes all processing strategies directly in custom instructions.
 
 ---
 
-### 中文版本 (Chinese Version)
+### Simple Version - Chinese (极简版 - 中文)
+
+```markdown
+## 文档处理规则
+
+读取二进制文档文件(PDF、Word、Excel、PowerPoint、HTML、ZIP等)时,始终使用MCP工具,而不是Read工具。Read工具只适用于纯文本文件(.txt、.md、.py、.sh、.log等)。
+
+MCP工具自动处理:
+- 格式转换为markdown
+- 学术论文LaTeX公式修复
+- 大文件分页
+- 结构化数据提取
+
+每个MCP工具的描述中都包含详细的使用策略指导。
+```
+
+### Simple Version - English (极简版 - 英文)
+
+```markdown
+## Document Processing Rule
+
+When reading binary document files (PDF, Word, Excel, PowerPoint, HTML, ZIP, etc.), always use MCP tools instead of the Read tool. The Read tool only works for plain text files (.txt, .md, .py, .sh, .log, etc.).
+
+MCP tools automatically handle:
+- Format-specific conversion to markdown
+- LaTeX formula fixing for academic papers
+- Pagination for large files
+- Structured data extraction
+
+Each MCP tool includes detailed usage strategies in its description to guide optimal usage.
+```
+
+---
+
+### Detailed Version - Chinese (详细版 - 中文)
 
 完整内容请查看: [CUSTOM_INSTRUCTIONS_CN.md](./CUSTOM_INSTRUCTIONS_CN.md)
 
-### English Version
+### Detailed Version - English (详细版 - 英文)
 
 完整内容请查看: [CUSTOM_INSTRUCTIONS_EN.md](./CUSTOM_INSTRUCTIONS_EN.md)

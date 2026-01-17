@@ -242,9 +242,14 @@ async def read_pdf(
     session_id: Optional[str] = None,
     return_format: Optional[str] = "text"
 ) -> Dict[str, Any]:
-    """Read and convert a PDF file to markdown text with enhanced features.
+    """Read and convert a PDF file to markdown text with LaTeX formula fixing.
 
-    Supports pagination, LaTeX formula fixing, structured extraction, and session management.
+    USAGE STRATEGY:
+    - For unknown file size: Start with preview_only=True, preview_lines=100 to assess content
+    - For large files (>10k chars): Use pagination with page=1, page_size=10000
+    - For detailed analysis: Enable extract_sections=True, extract_metadata=True, return_format="json"
+    - For academic papers: LaTeX formulas are automatically fixed (CID placeholders, Greek letters, math symbols)
+    - For multi-page reading: Reuse session_id from previous response for better performance
 
     Args:
         file_path: The path to the PDF file to read
@@ -252,17 +257,17 @@ async def read_pdf(
         page_size: Number of characters per page. Default: 10000.
         offset: Character offset (alternative to page). If specified, overrides page.
         limit: Character limit (alternative to page_size). If specified, overrides page_size.
-        extract_sections: Whether to extract document sections/headings. Default: False.
-        extract_tables: Whether to extract tables. Default: False.
-        extract_metadata: Whether to extract metadata. Default: False.
-        preview_only: Whether to return only a preview. Default: False.
+        extract_sections: Extract document sections/headings. Use for structured documents. Default: False.
+        extract_tables: Extract table information. Default: False.
+        extract_metadata: Extract file metadata (size, path, timestamp). Use with return_format="json". Default: False.
+        preview_only: Return only first N lines without full conversion. Use for quick assessment. Default: False.
         preview_lines: Number of lines for preview mode. Default: 100.
-        session_id: Session ID for resuming pagination. Generated if not provided.
-        return_format: Output format: 'json' (structured) or 'text' (plain). Default: 'text'.
+        session_id: Session ID for resuming pagination. Reuse for consecutive page requests.
+        return_format: Output format: 'json' (structured with metadata/sections) or 'text' (plain). Default: 'text'.
 
     Returns:
         A dictionary containing the text content or error message.
-        If return_format='json', returns enhanced structure with metadata, sections, etc.
+        If return_format='json', returns enhanced structure with metadata, sections, pagination_info, session_id.
     """
     start_time = time.time()
 
@@ -457,9 +462,13 @@ async def read_word(
     session_id: Optional[str] = None,
     return_format: Optional[str] = "text"
 ) -> Dict[str, Any]:
-    """Read and convert a Word document (.docx or .doc) to markdown with enhanced features.
+    """Read and convert a Word document (.docx or .doc) to markdown with formatting preserved.
 
-    Supports pagination, structured extraction, and session management.
+    USAGE STRATEGY:
+    - Preserves document formatting (bold, italic, headings, lists)
+    - For large documents: Use preview_only=True first to check structure
+    - For structured analysis: Enable extract_sections=True, return_format="json"
+    - Handles both .docx (Office 2007+) and .doc (Office 97-2003) formats
 
     Args:
         file_path: The path to the Word document to read
@@ -467,11 +476,11 @@ async def read_word(
         page_size: Number of characters per page. Default: 10000.
         offset: Character offset (alternative to page). If specified, overrides page.
         limit: Character limit (alternative to page_size). If specified, overrides page_size.
-        extract_sections: Whether to extract document sections/headings. Default: False.
-        extract_metadata: Whether to extract metadata. Default: False.
-        preview_only: Whether to return only a preview. Default: False.
+        extract_sections: Extract document sections/headings. Use for structured documents. Default: False.
+        extract_metadata: Extract file metadata. Use with return_format="json". Default: False.
+        preview_only: Return only first N lines for quick assessment. Default: False.
         preview_lines: Number of lines for preview mode. Default: 100.
-        session_id: Session ID for resuming pagination. Generated if not provided.
+        session_id: Session ID for resuming pagination. Reuse for consecutive requests.
         return_format: Output format: 'json' (structured) or 'text' (plain). Default: 'text'.
 
     Returns:
@@ -513,9 +522,14 @@ async def read_excel(
     session_id: Optional[str] = None,
     return_format: Optional[str] = "text"
 ) -> Dict[str, Any]:
-    """Read and convert an Excel file (.xlsx or .xls) to markdown table format with enhanced features.
+    """Read and convert an Excel file (.xlsx or .xls) to markdown table format.
 
-    Supports pagination, table extraction, and session management.
+    USAGE STRATEGY:
+    - Converts all worksheets to markdown tables with color formatting preserved
+    - For data analysis: Enable extract_tables=True to get structured table data
+    - For large spreadsheets: Use preview_only=True to see first few rows
+    - Always use return_format="json" with extract_tables=True for programmatic access
+    - Handles both .xlsx (Office 2007+) and .xls (Office 97-2003) formats
 
     Args:
         file_path: The path to the Excel file to read
@@ -523,11 +537,11 @@ async def read_excel(
         page_size: Number of characters per page. Default: 10000.
         offset: Character offset (alternative to page). If specified, overrides page.
         limit: Character limit (alternative to page_size). If specified, overrides page_size.
-        extract_tables: Whether to extract table information. Default: False.
-        extract_metadata: Whether to extract metadata. Default: False.
-        preview_only: Whether to return only a preview. Default: False.
+        extract_tables: Extract structured table data from each worksheet. Use with return_format="json". Default: False.
+        extract_metadata: Extract file metadata. Use with return_format="json". Default: False.
+        preview_only: Return only first N lines for quick assessment. Default: False.
         preview_lines: Number of lines for preview mode. Default: 100.
-        session_id: Session ID for resuming pagination. Generated if not provided.
+        session_id: Session ID for resuming pagination. Reuse for consecutive requests.
         return_format: Output format: 'json' (structured) or 'text' (plain). Default: 'text'.
 
     Returns:
@@ -570,9 +584,14 @@ async def read_powerpoint(
     session_id: Optional[str] = None,
     return_format: Optional[str] = "text"
 ) -> Dict[str, Any]:
-    """Read and convert a PowerPoint presentation (.pptx or .ppt) to markdown with enhanced features.
+    """Read and convert a PowerPoint presentation (.pptx or .ppt) to markdown.
 
-    Supports pagination, structured extraction, and session management.
+    USAGE STRATEGY:
+    - Extracts all slide content including titles, text, and notes
+    - Each slide is formatted as a separate section with heading
+    - For quick overview: Use preview_only=True to see first few slides
+    - For presentation analysis: Enable extract_sections=True to get slide-by-slide structure
+    - Handles both .pptx (Office 2007+) and .ppt (Office 97-2003) formats
 
     Args:
         file_path: The path to the PowerPoint file to read
@@ -580,12 +599,12 @@ async def read_powerpoint(
         page_size: Number of characters per page. Default: 10000.
         offset: Character offset (alternative to page). If specified, overrides page.
         limit: Character limit (alternative to page_size). If specified, overrides page_size.
-        extract_sections: Whether to extract document sections/headings. Default: False.
-        extract_tables: Whether to extract tables. Default: False.
-        extract_metadata: Whether to extract metadata. Default: False.
-        preview_only: Whether to return only a preview. Default: False.
+        extract_sections: Extract slide sections. Use to get individual slide content. Default: False.
+        extract_tables: Extract table information from slides. Default: False.
+        extract_metadata: Extract file metadata. Use with return_format="json". Default: False.
+        preview_only: Return only first N lines for quick assessment. Default: False.
         preview_lines: Number of lines for preview mode. Default: 100.
-        session_id: Session ID for resuming pagination. Generated if not provided.
+        session_id: Session ID for resuming pagination. Reuse for consecutive requests.
         return_format: Output format: 'json' (structured) or 'text' (plain). Default: 'text'.
 
     Returns:
@@ -654,9 +673,14 @@ async def read_html(
     session_id: Optional[str] = None,
     return_format: Optional[str] = "text"
 ) -> Dict[str, Any]:
-    """Read and convert an HTML file to markdown with enhanced features.
+    """Read and convert an HTML file to clean markdown.
 
-    Supports pagination, structured extraction, and session management.
+    USAGE STRATEGY:
+    - Automatically removes scripts, styles, and other non-content elements
+    - Preserves semantic structure (headings, lists, tables, links)
+    - For web pages: Ideal for extracting readable content from saved HTML
+    - For documentation: Enable extract_sections=True to get document structure
+    - Security: JavaScript links and data URIs are automatically sanitized
 
     Args:
         file_path: The path to the HTML file to read
@@ -664,12 +688,12 @@ async def read_html(
         page_size: Number of characters per page. Default: 10000.
         offset: Character offset (alternative to page). If specified, overrides page.
         limit: Character limit (alternative to page_size). If specified, overrides page_size.
-        extract_sections: Whether to extract document sections/headings. Default: False.
-        extract_tables: Whether to extract tables. Default: False.
-        extract_metadata: Whether to extract metadata. Default: False.
-        preview_only: Whether to return only a preview. Default: False.
+        extract_sections: Extract heading-based sections. Use for structured HTML documents. Default: False.
+        extract_tables: Extract table information. Default: False.
+        extract_metadata: Extract file metadata. Use with return_format="json". Default: False.
+        preview_only: Return only first N lines for quick assessment. Default: False.
         preview_lines: Number of lines for preview mode. Default: 100.
-        session_id: Session ID for resuming pagination. Generated if not provided.
+        session_id: Session ID for resuming pagination. Reuse for consecutive requests.
         return_format: Output format: 'json' (structured) or 'text' (plain). Default: 'text'.
 
     Returns:
