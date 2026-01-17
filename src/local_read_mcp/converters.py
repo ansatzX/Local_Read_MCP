@@ -8,9 +8,10 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import traceback
 import csv as csv_module
-from typing import Any, Union
+from typing import Any, Union, Optional, Dict, List
 from urllib.parse import quote, unquote, urlparse, urlunparse
 
 # Optional imports
@@ -26,8 +27,10 @@ except ImportError:
 
 try:
     import openpyxl
+    from openpyxl.utils import get_column_letter
 except ImportError:
     openpyxl = None
+    get_column_letter = None
 
 try:
     import pdfminer
@@ -67,11 +70,88 @@ VIDEO_EXTENSIONS = {"mp4", "mov", "avi", "mkv", "webm"}
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 
 class DocumentConverterResult:
-    """The result of converting a document to text."""
+    """Document conversion result with enhanced metadata and structure.
 
-    def __init__(self, title: Union[str, None] = None, text_content: str = ""):
+    This class encapsulates the result of converting a document to text/markdown format,
+    including optional metadata, sections, tables, and pagination information.
+
+    Attributes:
+        title: Document title (optional, may be None)
+        text_content: Converted text/markdown content
+        metadata: Additional metadata dict (file size, timestamps, etc.)
+        sections: List of extracted sections with headings
+        tables: List of extracted table information
+        pagination_info: Pagination details (page count, offsets, etc.)
+        processing_time_ms: Processing time in milliseconds (optional)
+        error: Error message if conversion failed (optional)
+
+    Example:
+        >>> result = DocumentConverterResult(
+        ...     title="My Document",
+        ...     text_content="# Heading\\n\\nContent here",
+        ...     metadata={"file_size": 12345}
+        ... )
+        >>> print(result.title)
+        My Document
+    """
+
+    def __init__(
+        self,
+        title: Union[str, None] = None,
+        text_content: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+        sections: Optional[List[Dict[str, Any]]] = None,
+        tables: Optional[List[Dict[str, Any]]] = None,
+        pagination_info: Optional[Dict[str, Any]] = None,
+        processing_time_ms: Optional[int] = None,
+        error: Optional[str] = None
+    ):
+        """Initialize document converter result.
+
+        Args:
+            title: Document title (optional)
+            text_content: Converted text content
+            metadata: Additional metadata (default: empty dict)
+            sections: List of document sections (default: empty list)
+            tables: List of extracted tables (default: empty list)
+            pagination_info: Pagination information (default: empty dict)
+            processing_time_ms: Processing time in milliseconds (optional)
+            error: Error message if failed (optional)
+        """
         self.title: Union[str, None] = title
         self.text_content: str = text_content
+        self.metadata = metadata or {}
+        self.sections = sections or []
+        self.tables = tables or []
+        self.pagination_info = pagination_info or {}
+        self.processing_time_ms = processing_time_ms
+        self.error = error
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert result to dictionary for JSON serialization.
+
+        Returns:
+            Dictionary representation of the conversion result.
+
+        Example:
+            >>> result = DocumentConverterResult(title="Test", text_content="Content")
+            >>> d = result.to_dict()
+            >>> d["title"]
+            'Test'
+        """
+        result = {
+            "title": self.title,
+            "text_content": self.text_content,
+            "metadata": self.metadata,
+            "sections": self.sections,
+            "tables": self.tables,
+            "pagination_info": self.pagination_info,
+        }
+        if self.processing_time_ms is not None:
+            result["processing_time_ms"] = self.processing_time_ms
+        if self.error is not None:
+            result["error"] = self.error
+        return result
 
 class _CustomMarkdownify(markdownify.MarkdownConverter):
     """
@@ -161,18 +241,34 @@ class _CustomMarkdownify(markdownify.MarkdownConverter):
         return super().convert_soup(soup)  # type: ignore
 
 
-class DocumentConverterResult:
-    """The result of converting a document to text."""
-
-    def __init__(self, title: Union[str, None] = None, text_content: str = ""):
-        self.title: Union[str, None] = title
-        self.text_content: str = text_content
+# Removed duplicate DocumentConverterResult class definition (was at line 198-204)
 
 
-def convert_html_to_md(html_content):
-    """
-    Placeholder for HTML to Markdown conversion function
-    In the original class, this would call self._convert()
+def convert_html_to_md(html_content: str) -> DocumentConverterResult:
+    """Convert HTML content to Markdown format.
+
+    This function parses HTML content using BeautifulSoup, removes script and style tags,
+    and converts the remaining content to Markdown format using a custom Markdown converter.
+
+    Args:
+        html_content: Raw HTML content string to convert
+
+    Returns:
+        DocumentConverterResult with the converted Markdown text and title
+
+    Raises:
+        Exception: If HTML parsing or conversion fails
+
+    Example:
+        >>> html = "<html><head><title>Test</title></head><body><h1>Hello</h1></body></html>"
+        >>> result = convert_html_to_md(html)
+        >>> "Hello" in result.text_content
+        True
+
+    Note:
+        - JavaScript and CSS are automatically removed
+        - Only the <body> content is converted if present, otherwise full document
+        - Uses _CustomMarkdownify for conversion with enhanced security
     """
     soup = BeautifulSoup(html_content, "html.parser")
     for script in soup(["script", "style"]):
@@ -194,55 +290,232 @@ def convert_html_to_md(html_content):
     )
 
 
-def HtmlConverter(local_path: str):
+def HtmlConverter(
+    local_path: str,
+    extract_metadata: bool = False,
+    extract_sections: bool = False
+) -> DocumentConverterResult:
     """
-    Convert an HTML file to Markdown format.
+    Convert an HTML file to Markdown format with enhanced features.
 
     Args:
         local_path: Path to the HTML file to convert.
+        extract_metadata: Whether to extract metadata (file size, etc.)
+        extract_sections: Whether to extract sections from content
 
     Returns:
-        DocumentConverterResult containing the converted Markdown text.
+        DocumentConverterResult containing the converted Markdown text and optional metadata/sections.
     """
-    with open(local_path, "rt", encoding="utf-8") as fh:
-        html_content = fh.read()
+    try:
+        with open(local_path, "rt", encoding="utf-8") as fh:
+            html_content = fh.read()
 
-        return convert_html_to_md(html_content)
+        # Convert HTML to markdown
+        soup = BeautifulSoup(html_content, "html.parser")
+        for script in soup(["script", "style"]):
+            script.extract()
+
+        body_elm = soup.find("body")
+        webpage_text = ""
+        if body_elm:
+            webpage_text = _CustomMarkdownify().convert_soup(body_elm)
+        else:
+            webpage_text = _CustomMarkdownify().convert_soup(soup)
+
+        assert isinstance(webpage_text, str)
+
+        # Apply content limit
+        webpage_text = apply_content_limit(webpage_text)
+
+        # Prepare metadata
+        metadata = {}
+        sections = []
+
+        if extract_metadata:
+            metadata = {
+                "file_path": local_path,
+                "file_size": os.path.getsize(local_path) if os.path.exists(local_path) else None,
+                "file_extension": os.path.splitext(local_path)[1],
+                "conversion_timestamp": time.time()
+            }
+
+        if extract_sections:
+            sections = extract_sections_from_markdown(webpage_text)
+
+        # Get title from HTML or use filename
+        title = None
+        if soup.title and soup.title.string:
+            title = soup.title.string
+        else:
+            # Use filename without extension as fallback
+            filename = os.path.basename(local_path)
+            title = os.path.splitext(filename)[0]
+
+        return DocumentConverterResult(
+            title=title,
+            text_content=webpage_text,
+            metadata=metadata,
+            sections=sections,
+            tables=[],  # HTML tables not extracted in basic version
+            processing_time_ms=None
+        )
+
+    except Exception as e:
+        return DocumentConverterResult(
+            title=None,
+            text_content=f"Error converting HTML: {str(e)}",
+            error=str(e)
+        )
 
 
-def DocxConverter(local_path: str):
+def DocxConverter(
+    local_path: str,
+    extract_metadata: bool = False,
+    extract_sections: bool = False
+) -> DocumentConverterResult:
     """
-    Convert a DOCX file to Markdown format.
+    Convert a DOCX file to Markdown format with enhanced features.
 
     Uses mammoth library to first convert DOCX to HTML, then converts
     the HTML to Markdown.
 
     Args:
         local_path: Path to the DOCX file to convert.
+        extract_metadata: Whether to extract metadata (file size, etc.)
+        extract_sections: Whether to extract sections from content
 
     Returns:
-        DocumentConverterResult containing the converted Markdown text.
+        DocumentConverterResult containing the converted Markdown text and optional metadata/sections.
     """
-    with open(local_path, "rb") as docx_file:
-        result = mammoth.convert_to_html(docx_file)
-        html_content = result.value
-    return convert_html_to_md(html_content)
+    if mammoth is None:
+        return DocumentConverterResult(
+            title=None,
+            text_content="[Error: mammoth not installed]",
+            error="mammoth not installed"
+        )
+
+    try:
+        with open(local_path, "rb") as docx_file:
+            result = mammoth.convert_to_html(docx_file)
+            html_content = result.value
+
+        # Convert HTML to markdown
+        soup = BeautifulSoup(html_content, "html.parser")
+        for script in soup(["script", "style"]):
+            script.extract()
+
+        body_elm = soup.find("body")
+        webpage_text = ""
+        if body_elm:
+            webpage_text = _CustomMarkdownify().convert_soup(body_elm)
+        else:
+            webpage_text = _CustomMarkdownify().convert_soup(soup)
+
+        assert isinstance(webpage_text, str)
+
+        # Apply content limit
+        webpage_text = apply_content_limit(webpage_text)
+
+        # Prepare metadata
+        metadata = {}
+        sections = []
+
+        if extract_metadata:
+            metadata = {
+                "file_path": local_path,
+                "file_size": os.path.getsize(local_path) if os.path.exists(local_path) else None,
+                "file_extension": os.path.splitext(local_path)[1],
+                "conversion_timestamp": time.time()
+            }
+
+        if extract_sections:
+            sections = extract_sections_from_markdown(webpage_text)
+
+        # Get title from HTML or use filename
+        title = None
+        if soup.title and soup.title.string:
+            title = soup.title.string
+        else:
+            # Use filename without extension as fallback
+            filename = os.path.basename(local_path)
+            title = os.path.splitext(filename)[0]
+
+        return DocumentConverterResult(
+            title=title,
+            text_content=webpage_text,
+            metadata=metadata,
+            sections=sections,
+            tables=[],  # DOCX tables not extracted in basic version
+            processing_time_ms=None
+        )
+
+    except Exception as e:
+        return DocumentConverterResult(
+            title=None,
+            text_content=f"Error converting DOCX: {str(e)}",
+            error=str(e)
+        )
 
 
-def XlsxConverter(local_path: str):
+def XlsxConverter(
+    local_path: str,
+    extract_metadata: bool = False,
+    extract_tables: bool = False
+) -> DocumentConverterResult:
     """
-    Converts Excel files to Markdown using openpyxl.
+    Converts Excel files to Markdown using openpyxl with enhanced features.
     Preserves color formatting and other cell styling information.
 
     Args:
         local_path: Path to the Excel file
+        extract_metadata: Whether to extract metadata (file size, sheet info, etc.)
+        extract_tables: Whether to extract table information (currently always extracts tables)
 
     Returns:
-        DocumentConverterResult with the Markdown representation of the Excel file
+        DocumentConverterResult with the Markdown representation and optional metadata
     """
     # Load the workbook
     wb = openpyxl.load_workbook(local_path, data_only=True)
     md_content = ""
+
+    # Prepare metadata
+    metadata = {}
+    tables = []
+
+    if extract_metadata:
+        # Collect workbook metadata
+        sheet_names = wb.sheetnames
+        metadata = {
+            "file_path": local_path,
+            "file_size": os.path.getsize(local_path) if os.path.exists(local_path) else None,
+            "file_extension": os.path.splitext(local_path)[1],
+            "conversion_timestamp": time.time(),
+            "sheet_count": len(sheet_names),
+            "sheet_names": sheet_names,
+            "active_sheet": wb.active.title if wb.active else None
+        }
+
+    if extract_tables:
+        # For Excel, each sheet is considered a table
+        for sheet_name in wb.sheetnames:
+            sheet = wb[sheet_name]
+            # Get table dimensions
+            min_row, min_col = 1, 1
+            max_row = max(
+                (cell.row for cell in sheet._cells.values() if cell.value is not None),
+                default=0,
+            )
+            max_col = max(
+                (cell.column for cell in sheet._cells.values() if cell.value is not None),
+                default=0,
+            )
+            if max_row > 0 and max_col > 0:
+                tables.append({
+                    "sheet_name": sheet_name,
+                    "rows": max_row,
+                    "columns": max_col,
+                    "has_data": True
+                })
 
     # Helper function to convert RGB color to hex
     def rgb_to_hex(rgb_value):
@@ -356,8 +629,6 @@ def XlsxConverter(local_path: str):
             col_widths = {}
             for col_idx in range(min_col, max_col + 1):
                 max_length = 0
-                # col_letter = get_column_letter(col_idx)
-                _ = get_column_letter(col_idx)
                 for row_idx in range(min_row, max_row + 1):
                     try:
                         cell = sheet.cell(row=row_idx, column=col_idx)
@@ -471,9 +742,20 @@ def XlsxConverter(local_path: str):
 
         md_content += "\n\n"  # Extra newlines between sheets
 
+    # Apply content limit
+    final_content = apply_content_limit(md_content.strip())
+
+    # Use filename without extension as title
+    filename = os.path.basename(local_path)
+    title = os.path.splitext(filename)[0]
+
     return DocumentConverterResult(
-        title=None,
-        text_content=md_content.strip(),
+        title=title,
+        text_content=final_content,
+        metadata=metadata,
+        sections=[],  # Excel doesn't have sections in markdown sense
+        tables=tables,
+        processing_time_ms=None  # Can be calculated by caller
     )
 
 
@@ -721,24 +1003,79 @@ def ZipConverter(local_path: str, **kwargs):
     )
 
 
-def PdfConverter(local_path: str) -> DocumentConverterResult:
+def PdfConverter(
+    local_path: str,
+    extract_metadata: bool = False,
+    extract_sections: bool = False,
+    fix_latex: bool = True
+) -> DocumentConverterResult:
     """
-    Convert a PDF file to text format.
+    Convert a PDF file to text format with enhanced features.
 
     Args:
         local_path: Path to PDF file to convert.
+        extract_metadata: Whether to extract metadata (file size, etc.)
+        extract_sections: Whether to extract sections from content
+        fix_latex: Whether to fix LaTeX formula parsing issues
 
     Returns:
-        DocumentConverterResult containing extracted text.
+        DocumentConverterResult containing extracted text and optional metadata/sections.
     """
     if pdfminer is None:
         return DocumentConverterResult(
             title=None,
-            text_content="[Error: pdfminer-six not installed]"
+            text_content="[Error: pdfminer-six not installed]",
+            error="pdfminer-six not installed"
         )
 
-    text_content = pdfminer.high_level.extract_text(local_path)
-    return DocumentConverterResult(title=None, text_content=text_content)
+    try:
+        # Extract text content
+        text_content = pdfminer.high_level.extract_text(local_path)
+
+        # Apply LaTeX fixes if requested
+        if fix_latex:
+            text_content = fix_latex_formulas(text_content)
+
+        # Apply content limit (200,000 characters)
+        text_content = apply_content_limit(text_content)
+
+        # Prepare metadata
+        metadata = {}
+        sections = []
+
+        if extract_metadata:
+            metadata = {
+                "file_path": local_path,
+                "file_size": os.path.getsize(local_path) if os.path.exists(local_path) else None,
+                "file_extension": os.path.splitext(local_path)[1],
+                "conversion_timestamp": time.time()
+            }
+
+        if extract_sections:
+            sections = extract_sections_from_markdown(text_content)
+
+        # Try to extract title from first line or metadata
+        title = None
+        if text_content:
+            first_line = text_content.split('\n')[0].strip()
+            if first_line and len(first_line) < 200:  # Reasonable title length
+                title = first_line
+
+        return DocumentConverterResult(
+            title=title,
+            text_content=text_content,
+            metadata=metadata,
+            sections=sections,
+            tables=[],  # PDF tables not extracted in basic version
+            processing_time_ms=None  # Can be calculated by caller
+        )
+
+    except Exception as e:
+        return DocumentConverterResult(
+            title=None,
+            text_content=f"Error converting PDF: {str(e)}",
+            error=str(e)
+        )
 
 
 def TextConverter(local_path: str) -> DocumentConverterResult:
@@ -840,3 +1177,352 @@ def MarkItDownConverter(local_path: str) -> DocumentConverterResult:
     md = MarkItDown(enable_plugins=True)
     result = md.convert(local_path)
     return DocumentConverterResult(title=result.title, text_content=result.text_content)
+
+
+# ============================================================================
+# Pagination and Session Management
+# ============================================================================
+
+import hashlib
+import time
+from typing import Optional, Dict, Any, Tuple
+
+
+class PaginationManager:
+    """Manages pagination and session state for large documents."""
+
+    def __init__(self, content: str, page_size: int = 10000):
+        """
+        Initialize pagination manager.
+
+        Args:
+            content: The full content to paginate
+            page_size: Number of characters per page (default: 10000)
+        """
+        self.content = content
+        self.page_size = page_size
+        self.total_chars = len(content)
+        self.total_pages = max(1, (self.total_chars + page_size - 1) // page_size)
+
+    def get_page(self, page: int = 1) -> Tuple[str, bool, Dict[str, Any]]:
+        """
+        Get a specific page of content.
+
+        Args:
+            page: Page number (1-indexed)
+
+        Returns:
+            Tuple of (page_content, has_more, pagination_info)
+        """
+        if page < 1:
+            page = 1
+        if page > self.total_pages:
+            page = self.total_pages
+
+        start = (page - 1) * self.page_size
+        end = min(start + self.page_size, self.total_chars)
+
+        page_content = self.content[start:end]
+        has_more = end < self.total_chars
+
+        pagination_info = {
+            "current_page": page,
+            "total_pages": self.total_pages,
+            "page_size": self.page_size,
+            "char_start": start,
+            "char_end": end,
+            "has_more": has_more,
+            "total_chars": self.total_chars
+        }
+
+        return page_content, has_more, pagination_info
+
+    def get_slice(self, offset: int, limit: Optional[int] = None) -> Tuple[str, bool, Dict[str, Any]]:
+        """
+        Get a slice of content by character offset.
+
+        Args:
+            offset: Character offset to start from
+            limit: Maximum number of characters to return (None for all remaining)
+
+        Returns:
+            Tuple of (slice_content, has_more, pagination_info)
+        """
+        if offset >= self.total_chars:
+            return "", False, {"char_offset": offset, "char_limit": limit, "has_more": False}
+
+        if limit is None:
+            end = self.total_chars
+            has_more = False
+        else:
+            end = min(offset + limit, self.total_chars)
+            has_more = end < self.total_chars
+
+        slice_content = self.content[offset:end]
+
+        pagination_info = {
+            "char_offset": offset,
+            "char_limit": limit,
+            "char_start": offset,
+            "char_end": end,
+            "has_more": has_more,
+            "total_chars": self.total_chars
+        }
+
+        return slice_content, has_more, pagination_info
+
+
+def generate_session_id(file_path: str, prefix: str = "session") -> str:
+    """
+    Generate a unique session ID for a file.
+
+    Args:
+        file_path: Path to the file
+        prefix: Prefix for the session ID
+
+    Returns:
+        Unique session ID string
+    """
+    file_hash = hashlib.md5(file_path.encode()).hexdigest()[:8]
+    timestamp = int(time.time())
+    return f"{prefix}_{file_hash}_{timestamp}"
+
+
+def apply_content_limit(content: str, max_chars: int = 200000) -> str:
+    """
+    Apply hard limit to content length.
+
+    Args:
+        content: Content to limit
+        max_chars: Maximum number of characters (default: 200,000)
+
+    Returns:
+        Limited content with truncation notice if needed
+    """
+    if len(content) > max_chars:
+        return content[:max_chars] + "\n... [Content truncated]"
+    return content
+
+
+def extract_sections_from_markdown(content: str) -> List[Dict[str, Any]]:
+    """
+    Extract sections from markdown text based on headings.
+
+    Args:
+        content: Markdown content
+
+    Returns:
+        List of section dictionaries with heading, level, content, etc.
+    """
+    sections = []
+    lines = content.split('\n')
+    current_section = None
+    section_content = []
+
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        if line_stripped.startswith('#'):
+            # Save previous section if exists
+            if current_section is not None:
+                sections.append({
+                    "heading": current_section['heading'],
+                    "level": current_section['level'],
+                    "content": '\n'.join(section_content).strip(),
+                    "start_line": current_section['start_line'],
+                    "end_line": i - 1,
+                    "char_start": current_section.get('char_start', 0),
+                    "char_end": current_section.get('char_end', 0)
+                })
+
+            # Start new section
+            heading_text = line.lstrip('#').strip()
+            level = len(line) - len(line.lstrip('#'))
+            current_section = {
+                'heading': heading_text,
+                'level': level,
+                'start_line': i,
+                'char_start': sum(len(l) + 1 for l in lines[:i])  # +1 for newline
+            }
+            section_content = []
+        elif current_section is not None:
+            section_content.append(line)
+
+    # Add the last section if exists
+    if current_section is not None:
+        sections.append({
+            "heading": current_section['heading'],
+            "level": current_section['level'],
+            "content": '\n'.join(section_content).strip(),
+            "start_line": current_section['start_line'],
+            "end_line": len(lines) - 1,
+            "char_start": current_section.get('char_start', 0),
+            "char_end": sum(len(line) + 1 for line in lines) - 1
+        })
+
+    return sections
+
+
+def fix_latex_formulas(content: str) -> str:
+    """Fix common LaTeX formula parsing issues from PDF extraction.
+
+    This function replaces common LaTeX parsing artifacts with proper Unicode characters:
+    - CID placeholders (cid:XXX) with corresponding characters
+    - LaTeX commands like \alpha with Greek letters (α)
+    - Mathematical symbols like \times with Unicode (×)
+    - Simplifies superscripts and subscripts notation
+
+    Args:
+        content: Content string with LaTeX formulas that need fixing
+
+    Returns:
+        Content with fixed LaTeX formulas converted to Unicode
+
+    Example:
+        >>> content = "Formula (cid:16)x(cid:17)"
+        >>> result = fix_latex_formulas(content)
+        >>> "〈x〉" in result
+        True
+
+    Note:
+        This is a best-effort conversion. Some complex LaTeX formulas
+        may not be fully converted.
+    """
+    if not content:
+        return content
+
+    # Fix (cid:XXX) placeholders - using simple replace instead of regex
+    cid_map = {
+        '(cid:16)': '〈',
+        '(cid:17)': '〉',
+        '(cid:40)': '(',
+        '(cid:41)': ')',
+        '(cid:91)': '[',
+        '(cid:93)': ']',
+        '(cid:123)': '{',
+        '(cid:125)': '}',
+        '(cid:60)': '<',
+        '(cid:62)': '>',
+        '(cid:34)': '"',
+        '(cid:39)': "'",
+        '(cid:44)': ',',
+        '(cid:46)': '.',
+        '(cid:58)': ':',
+        '(cid:59)': ';',
+        '(cid:61)': '=',
+        '(cid:43)': '+',
+        '(cid:45)': '-',
+        '(cid:42)': '*',
+        '(cid:47)': '/',
+        '(cid:92)': '\\',
+        '(cid:124)': '|',
+    }
+    for pattern, replacement in cid_map.items():
+        content = content.replace(pattern, replacement)
+
+    # Fix Greek letters - use replace instead of re.sub
+    greek_map = {
+        r'\alpha': 'α',
+        r'\beta': 'β',
+        r'\gamma': 'γ',
+        r'\delta': 'δ',
+        r'\epsilon': 'ε',
+        r'\zeta': 'ζ',
+        r'\eta': 'η',
+        r'\theta': 'θ',
+        r'\iota': 'ι',
+        r'\kappa': 'κ',
+        r'\lambda': 'λ',
+        r'\mu': 'μ',
+        r'\nu': 'ν',
+        r'\xi': 'ξ',
+        r'\pi': 'π',
+        r'\rho': 'ρ',
+        r'\sigma': 'σ',
+        r'\tau': 'τ',
+        r'\upsilon': 'υ',
+        r'\phi': 'φ',
+        r'\chi': 'χ',
+        r'\psi': 'ψ',
+        r'\omega': 'ω',
+        r'\Alpha': 'Α',
+        r'\Beta': 'Β',
+        r'\Gamma': 'Γ',
+        r'\Delta': 'Δ',
+        r'\Epsilon': 'Ε',
+        r'\Zeta': 'Ζ',
+        r'\Eta': 'Η',
+        r'\Theta': 'Θ',
+        r'\Iota': 'Ι',
+        r'\Kappa': 'Κ',
+        r'\Lambda': 'Λ',
+        r'\Mu': 'Μ',
+        r'\Nu': 'Ν',
+        r'\Xi': 'Ξ',
+        r'\Pi': 'Π',
+        r'\Rho': 'Ρ',
+        r'\Sigma': 'Σ',
+        r'\Tau': 'Τ',
+        r'\Upsilon': 'Υ',
+        r'\Phi': 'Φ',
+        r'\Chi': 'Χ',
+        r'\Psi': 'Ψ',
+        r'\Omega': 'Ω',
+    }
+    for latex_cmd, unicode_char in greek_map.items():
+        content = content.replace(latex_cmd, unicode_char)
+
+    # Fix mathematical symbols
+    math_map = {
+        r'\times': '×',
+        r'\div': '÷',
+        r'\pm': '±',
+        r'\mp': '∓',
+        r'\leq': '≤',
+        r'\geq': '≥',
+        r'\neq': '≠',
+        r'\approx': '≈',
+        r'\equiv': '≡',
+        r'\propto': '∝',
+        r'\infty': '∞',
+        r'\partial': '∂',
+        r'\nabla': '∇',
+        r'\cdot': '·',
+        r'\cdots': '⋯',
+        r'\vdots': '⋮',
+        r'\ddots': '⋱',
+        r'\int': '∫',
+        r'\sum': '∑',
+        r'\prod': '∏',
+        r'\cup': '∪',
+        r'\cap': '∩',
+        r'\in': '∈',
+        r'\notin': '∉',
+        r'\subset': '⊂',
+        r'\supset': '⊃',
+        r'\subseteq': '⊆',
+        r'\supseteq': '⊇',
+        r'\emptyset': '∅',
+        r'\forall': '∀',
+        r'\exists': '∃',
+        r'\neg': '¬',
+        r'\wedge': '∧',
+        r'\vee': '∨',
+        r'\rightarrow': '→',
+        r'\leftarrow': '←',
+        r'\Rightarrow': '⇒',
+        r'\Leftarrow': '⇐',
+        r'\Leftrightarrow': '⇔',
+    }
+    for latex_cmd, unicode_char in math_map.items():
+        content = content.replace(latex_cmd, unicode_char)
+
+    # Fix superscripts and subscripts
+    content = re.sub(r'\^\{(\d+)\}', r'^\1', content)  # ^{2} → ^2
+    content = re.sub(r'_\{(\d+)\}', r'_\1', content)  # _{2} → _2
+    content = re.sub(r'\^\{([a-zA-Z])\}', r'^\1', content)  # ^{x} → ^x
+    content = re.sub(r'_\{([a-zA-Z])\}', r'_\1', content)  # _{x} → _x
+
+    return content
+
+
+    return content
