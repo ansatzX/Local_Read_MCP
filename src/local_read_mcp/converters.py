@@ -4,6 +4,7 @@
 ################################################################################
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -49,6 +50,11 @@ except ImportError:
     MarkItDown = None
 
 try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
+
+try:
     from bs4 import BeautifulSoup
 except ImportError:
     BeautifulSoup = None
@@ -73,7 +79,7 @@ class DocumentConverterResult:
     """Document conversion result with enhanced metadata and structure.
 
     This class encapsulates the result of converting a document to text/markdown format,
-    including optional metadata, sections, tables, and pagination information.
+    including optional metadata, sections, tables, images, and pagination information.
 
     Attributes:
         title: Document title (optional, may be None)
@@ -81,6 +87,7 @@ class DocumentConverterResult:
         metadata: Additional metadata dict (file size, timestamps, etc.)
         sections: List of extracted sections with headings
         tables: List of extracted table information
+        images: List of extracted image information (for PDFs with extract_images=True)
         pagination_info: Pagination details (page count, offsets, etc.)
         processing_time_ms: Processing time in milliseconds (optional)
         error: Error message if conversion failed (optional)
@@ -102,6 +109,7 @@ class DocumentConverterResult:
         metadata: Optional[Dict[str, Any]] = None,
         sections: Optional[List[Dict[str, Any]]] = None,
         tables: Optional[List[Dict[str, Any]]] = None,
+        images: Optional[List[Dict[str, Any]]] = None,
         pagination_info: Optional[Dict[str, Any]] = None,
         processing_time_ms: Optional[int] = None,
         error: Optional[str] = None
@@ -114,6 +122,7 @@ class DocumentConverterResult:
             metadata: Additional metadata (default: empty dict)
             sections: List of document sections (default: empty list)
             tables: List of extracted tables (default: empty list)
+            images: List of extracted images (default: empty list)
             pagination_info: Pagination information (default: empty dict)
             processing_time_ms: Processing time in milliseconds (optional)
             error: Error message if failed (optional)
@@ -123,6 +132,7 @@ class DocumentConverterResult:
         self.metadata = metadata or {}
         self.sections = sections or []
         self.tables = tables or []
+        self.images = images or []
         self.pagination_info = pagination_info or {}
         self.processing_time_ms = processing_time_ms
         self.error = error
@@ -1003,10 +1013,140 @@ def ZipConverter(local_path: str, **kwargs):
     )
 
 
+def extract_pdf_images(
+    pdf_path: str,
+    output_dir: Optional[str] = None,
+    page_range: Optional[tuple] = None
+) -> List[Dict[str, Any]]:
+    """
+    Extract images from PDF file using PyMuPDF.
+
+    Args:
+        pdf_path: Path to PDF file
+        output_dir: Directory to save extracted images. If None, creates temp directory
+        page_range: Tuple of (start_page, end_page) to extract from specific pages.
+                    If None, extracts from all pages. Page numbers are 0-indexed.
+
+    Returns:
+        List of dictionaries containing image information:
+        [
+            {
+                "page": int,  # Page number (0-indexed)
+                "index": int,  # Image index on the page
+                "xref": int,  # PDF object reference
+                "width": int,  # Image width in pixels
+                "height": int,  # Image height in pixels
+                "format": str,  # Image format (png, jpeg, etc.)
+                "size": int,  # File size in bytes
+                "saved_path": str,  # Path where image was saved
+            },
+            ...
+        ]
+
+    Raises:
+        ImportError: If PyMuPDF (fitz) is not installed
+        FileNotFoundError: If PDF file doesn't exist
+    """
+    if fitz is None:
+        raise ImportError(
+            "PyMuPDF (fitz) is required for image extraction. "
+            "Install with: pip install pymupdf"
+        )
+
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+
+    # Create output directory if needed
+    if output_dir is None:
+        output_dir = tempfile.mkdtemp(prefix="pdf_images_")
+    else:
+        os.makedirs(output_dir, exist_ok=True)
+
+    logger = logging.getLogger(__name__)
+    logger.info(f"Extracting images from PDF: {pdf_path}")
+    logger.info(f"Saving images to: {output_dir}")
+
+    images_info = []
+
+    try:
+        doc = fitz.open(pdf_path)
+
+        # Determine page range
+        start_page = 0
+        end_page = len(doc)
+        if page_range:
+            start_page, end_page = page_range
+            start_page = max(0, start_page)
+            end_page = min(len(doc), end_page)
+
+        # Extract images from each page
+        for page_num in range(start_page, end_page):
+            page = doc[page_num]
+            image_list = page.get_images()
+
+            logger.debug(f"Page {page_num}: found {len(image_list)} images")
+
+            for img_index, img in enumerate(image_list):
+                xref = img[0]  # XREF number
+
+                # Extract image
+                try:
+                    base_image = doc.extract_image(xref)
+
+                    # Get image properties
+                    image_bytes = base_image["image"]
+                    image_ext = base_image["ext"]  # png, jpeg, etc.
+                    image_width = base_image["width"]
+                    image_height = base_image["height"]
+
+                    # Generate filename
+                    image_filename = f"page{page_num:03d}_img{img_index:02d}.{image_ext}"
+                    image_path = os.path.join(output_dir, image_filename)
+
+                    # Save image
+                    with open(image_path, "wb") as f:
+                        f.write(image_bytes)
+
+                    # Record image info
+                    images_info.append({
+                        "page": page_num,
+                        "index": img_index,
+                        "xref": xref,
+                        "width": image_width,
+                        "height": image_height,
+                        "format": image_ext,
+                        "size": len(image_bytes),
+                        "saved_path": image_path,
+                    })
+
+                    logger.debug(
+                        f"Extracted: {image_filename} "
+                        f"({image_width}x{image_height}, {len(image_bytes)} bytes)"
+                    )
+
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to extract image {img_index} from page {page_num}: {e}"
+                    )
+                    continue
+
+        doc.close()
+
+        logger.info(f"Successfully extracted {len(images_info)} images")
+
+    except Exception as e:
+        logger.error(f"Error extracting images from PDF: {e}")
+        raise
+
+    return images_info
+
+
 def PdfConverter(
     local_path: str,
     extract_metadata: bool = False,
     extract_sections: bool = False,
+    extract_images: bool = False,
+    images_output_dir: Optional[str] = None,
     fix_latex: bool = True
 ) -> DocumentConverterResult:
     """
@@ -1016,11 +1156,15 @@ def PdfConverter(
         local_path: Path to PDF file to convert.
         extract_metadata: Whether to extract metadata (file size, etc.)
         extract_sections: Whether to extract sections from content
+        extract_images: Whether to extract images from PDF (requires PyMuPDF)
+        images_output_dir: Directory to save extracted images (default: temp directory)
         fix_latex: Whether to fix LaTeX formula parsing issues
 
     Returns:
-        DocumentConverterResult containing extracted text and optional metadata/sections.
+        DocumentConverterResult containing extracted text and optional metadata/sections/images.
     """
+    logger = logging.getLogger(__name__)
+
     if pdfminer is None:
         return DocumentConverterResult(
             title=None,
@@ -1056,6 +1200,7 @@ def PdfConverter(
         # Prepare metadata
         metadata = {}
         sections = []
+        images = []
 
         if extract_metadata:
             metadata = {
@@ -1068,6 +1213,29 @@ def PdfConverter(
 
         if extract_sections:
             sections = extract_sections_from_markdown(text_content)
+
+        # Extract images if requested
+        if extract_images:
+            if fitz is None:
+                logger.warning(
+                    "PyMuPDF not installed. Cannot extract images. "
+                    "Install with: pip install pymupdf"
+                )
+                metadata["image_extraction_error"] = "PyMuPDF not installed"
+            else:
+                try:
+                    images = extract_pdf_images(local_path, output_dir=images_output_dir)
+                    logger.info(f"Extracted {len(images)} images from PDF")
+
+                    # Add image count to metadata
+                    if extract_metadata:
+                        metadata["image_count"] = len(images)
+                        if images_output_dir:
+                            metadata["images_directory"] = images_output_dir
+
+                except Exception as e:
+                    logger.error(f"Failed to extract images: {e}")
+                    metadata["image_extraction_error"] = str(e)
 
         # Try to extract title from first line or metadata
         title = None
@@ -1082,10 +1250,12 @@ def PdfConverter(
             metadata=metadata,
             sections=sections,
             tables=[],  # PDF tables not extracted in basic version
+            images=images,  # Extracted images
             processing_time_ms=None  # Can be calculated by caller
         )
 
     except Exception as e:
+        logger.error(f"Error converting PDF: {e}")
         return DocumentConverterResult(
             title=None,
             text_content=f"Error converting PDF: {str(e)}",

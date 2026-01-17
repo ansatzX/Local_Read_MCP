@@ -4,12 +4,103 @@ Model Context Protocol server for local document processing without external API
 
 ## Features
 
-- **Local Processing**: No cloud services or API keys required
+- **Local Processing**: No cloud services or API keys required for document conversion
 - **Multi-format Support**: PDF, Word, Excel, PowerPoint, HTML, Text, JSON, CSV, YAML, ZIP
 - **Markdown Output**: All formats convert to readable markdown/text
 - **MCP Integration**: Seamless with Claude Code and other MCP clients
 - **Advanced Capabilities**: Pagination, structured extraction, LaTeX formula fixing, session management
 - **Smart Processing**: Automatic content limiting (200k chars), preview mode, metadata extraction
+- **PDF Image Extraction**: Extract embedded images from PDFs using PyMuPDF
+- **Vision Analysis** (Optional): Analyze PDF charts/diagrams with multimodal AI models
+
+## Vision Analysis for PDF Charts
+
+**Note**: Vision analysis is an optional feature for advanced PDF processing.
+
+### When You Need It
+
+The PDF processing system can **extract all images** (both embedded and vector graphics) without any API configuration. However, to **understand the content** of these images (what the charts show, what the diagrams mean, etc.), you need a multimodal vision API.
+
+**Two separate capabilities**:
+1. **Image Extraction** (no API needed):
+   - Extracts embedded images (photos, screenshots) via `get_images()`
+   - Detects vector graphics (charts, diagrams) by analyzing PDF drawing commands
+   - Renders vector graphics pages as high-resolution PNG images
+
+2. **Image Content Analysis** (requires vision API):
+   - Analyzes what the images show
+   - Extracts data from charts
+   - Understands diagrams and flowcharts
+
+**What happens with/without API**:
+- **Without API**: All images are extracted and saved, but not analyzed. You can view them manually.
+- **With API**: All images are extracted AND analyzed by AI to understand their content.
+
+### Affected Use Cases
+
+If your PDFs contain images (embedded or vector graphics) and you want to understand their content automatically:
+
+- Performance comparison charts
+- Architecture diagrams
+- Flowcharts
+- Mathematical plots
+- Technical illustrations drawn as vector graphics
+
+Then configuring vision analysis is recommended for complete extraction.
+
+### Configuration (Optional)
+
+1. **Install vision dependencies**:
+
+   ```bash
+   uv pip install -e ".[vision]"
+   ```
+2. **Configure API** (choose one option):
+
+   **Option A: Doubao (ByteDance, recommended)**
+
+   ```bash
+   # Create .env file
+   cp .env.example .env
+
+   # Edit .env
+   OPENAI_API_KEY=your-doubao-api-key
+   OPENAI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+   OPENAI_VISION_MODEL=doubao-seed-1-8-251228
+   ```
+
+   **Option B: OpenAI GPT-4o**
+
+   ```bash
+   OPENAI_API_KEY=sk-your-openai-key
+   OPENAI_BASE_URL=https://api.openai.com/v1
+   OPENAI_VISION_MODEL=gpt-4o
+   ```
+
+   **Option C: Local Ollama (free, no API key)**
+
+   ```bash
+   # Install and start Ollama
+   ollama pull llava:13b
+   ollama serve
+
+   # Configure in .env
+   VISION_DEFAULT_PROVIDER=ollama
+   OLLAMA_BASE_URL=http://localhost:11434
+   OLLAMA_VISION_MODEL=llava:13b
+   ```
+
+### Behavior Without Configuration
+
+If you don't configure vision analysis:
+
+- Basic PDF reading works normally
+- **All images are extracted** (embedded images + vector graphics)
+- Image files are saved to disk for manual viewing
+- **Image content is not analyzed** - you won't get AI-generated descriptions
+- You'll see a warning: `[WARN] Images extracted but content not analyzed`
+
+**This is fine for most use cases** - only configure if you want AI to automatically understand image content.
 
 ## Quick Installation
 
@@ -27,11 +118,20 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
 # Install dependencies
 uv pip install -e .
+
+# Optional: Install vision analysis dependencies (for PDF chart analysis)
+uv pip install -e ".[vision]"
 ```
+
+**Optional Dependencies:**
+
+- `vision`: Enables vision analysis for PDF charts using OpenAI/Doubao or Ollama
+  - `openai`: For cloud-based vision API (OpenAI GPT-4o or Doubao multimodal models)
+  - `aiohttp`: For local Ollama vision models (e.g., LLaVA)
 
 ### 2. Configure Claude Code
 
-Edit `~/`claude `/claude-code-desktop/settings.json` .
+Edit `~/.claude/settings.json`.
 
 **Note**: Claude Code supports both array format (`"mcpServers": [{ ... }]`) and object format (`"mcpServers": { "Local_Read": { ... } }`).
 
@@ -80,19 +180,21 @@ All tools support enhanced parameters for pagination, structured extraction, and
 
 All read tools accept these optional parameters:
 
-| Parameter            | Type | Default | Description                                |
-| -------------------- | ---- | ------- | ------------------------------------------ |
-| `page`             | int  | 1       | Page number for pagination (1-indexed)     |
-| `page_size`        | int  | 10000   | Characters per page                        |
-| `offset`           | int  | None    | Character offset (alternative to page)     |
-| `limit`            | int  | None    | Character limit (alternative to page_size) |
-| `extract_sections` | bool | False   | Extract document sections/headings         |
-| `extract_tables`   | bool | False   | Extract table information                  |
-| `extract_metadata` | bool | False   | Extract file metadata                      |
-| `preview_only`     | bool | False   | Return preview (first N lines)             |
-| `preview_lines`    | int  | 100     | Lines to show in preview mode              |
-| `session_id`       | str  | None    | Session ID for pagination tracking         |
-| `return_format`    | str  | "text"  | Output format: "text" or "json"            |
+| Parameter             | Type | Default | Description                                  |
+| --------------------- | ---- | ------- | -------------------------------------------- |
+| `page`              | int  | 1       | Page number for pagination (1-indexed)       |
+| `page_size`         | int  | 10000   | Characters per page                          |
+| `offset`            | int  | None    | Character offset (alternative to page)       |
+| `limit`             | int  | None    | Character limit (alternative to page_size)   |
+| `extract_sections`  | bool | False   | Extract document sections/headings           |
+| `extract_tables`    | bool | False   | Extract table information                    |
+| `extract_metadata`  | bool | False   | Extract file metadata                        |
+| `extract_images`    | bool | False   | Extract images (PDF only, requires PyMuPDF)  |
+| `images_output_dir` | str  | None    | Directory to save images (default: temp dir) |
+| `preview_only`      | bool | False   | Return preview (first N lines)               |
+| `preview_lines`     | int  | 100     | Lines to show in preview mode                |
+| `session_id`        | str  | None    | Session ID for pagination tracking           |
+| `return_format`     | str  | "text"  | Output format: "text" or "json"              |
 
 ## Usage Examples
 
@@ -136,6 +238,98 @@ PDF files with LaTeX formulas are automatically processed to convert common symb
 - CID placeholders: `(cid:16)` to angle brackets
 - Greek letters: `\alpha` to α, `\beta` to β, etc.
 - Math symbols: `\times` to ×, `\leq` to ≤, etc.
+
+### PDF Image Extraction
+
+Extract images from PDF files using PyMuPDF (fitz):
+
+```python
+# Extract all images from PDF
+read_pdf(
+    file_path="/path/to/document.pdf",
+    extract_images=True,
+    images_output_dir="/tmp/pdf_images",
+    extract_metadata=True,
+    return_format="json"
+)
+
+# Response includes images array with details:
+# {
+#   "images": [
+#     {
+#       "page": 0,              # Page number (0-indexed)
+#       "index": 0,             # Image index on page
+#       "width": 800,           # Image width in pixels
+#       "height": 600,          # Image height in pixels
+#       "format": "png",        # Image format
+#       "size": 123456,         # File size in bytes
+#       "saved_path": "/tmp/pdf_images/page000_img00.png"
+#     }
+#   ],
+#   "metadata": {
+#     "image_count": 10,
+#     "images_directory": "/tmp/pdf_images"
+#   }
+# }
+```
+
+**Requirements**:
+
+- PyMuPDF (fitz): `uv pip install pymupdf`
+
+**Vision Analysis** (Optional):
+
+To analyze extracted images with AI vision models, use the separate `vision_server`:
+
+1. **Configure vision backend** (create `.env` from `.env.example`):
+
+   ```bash
+   # Option A: Local Ollama (free, requires GPU)
+   VISION_DEFAULT_PROVIDER=ollama
+   OLLAMA_BASE_URL=http://localhost:11434
+   OLLAMA_VISION_MODEL=llava:13b
+
+   # Option B: OpenAI GPT-4o (requires API key)
+   VISION_DEFAULT_PROVIDER=openai
+   OPENAI_API_KEY=sk-your-key-here
+   OPENAI_VISION_MODEL=gpt-4o
+   ```
+2. **Start vision server**:
+
+   ```bash
+   python -m local_read_mcp.vision_server
+   ```
+3. **Configure in Claude Code** (`claude_code_mcp_servers.json`):
+
+   ```json
+   {
+     "mcpServers": [
+       {
+         "name": "Local_Read",
+         "command": "uv",
+         "args": [
+           "--directory", "/path/to/Local_Read_MCP",
+           "run", "python", "-m", "local_read_mcp.server"
+         ]
+       },
+       {
+         "name": "Local_Vision",
+         "command": "uv",
+         "args": [
+           "--directory", "/path/to/Local_Read_MCP",
+           "run", "python", "-m", "local_read_mcp.vision_server"
+         ]
+       }
+     ]
+   }
+   ```
+4. **Use in Claude Code**:
+
+   ```
+   "请读取 document.pdf 并提取所有图片,然后分析每张图片的内容"
+   ```
+
+See `example_pdf_images.py` for complete code examples.
 
 ### Content Limiting
 

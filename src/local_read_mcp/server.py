@@ -101,6 +101,9 @@ def fix_tool_arguments(tool_name: str, arguments: dict) -> dict:
         "metadata": "extract_metadata",
         "sections": "extract_sections",
         "tables": "extract_tables",
+        "images": "extract_images",
+        "image_dir": "images_output_dir",
+        "output_dir": "images_output_dir",
     }
 
     for old_name, new_name in renames.items():
@@ -453,6 +456,8 @@ async def read_pdf(
     extract_sections: Optional[bool] = False,
     extract_tables: Optional[bool] = False,
     extract_metadata: Optional[bool] = False,
+    extract_images: Optional[bool] = False,
+    images_output_dir: Optional[str] = None,
     preview_only: Optional[bool] = False,
     preview_lines: Optional[int] = 100,
     session_id: Optional[str] = None,
@@ -466,6 +471,7 @@ async def read_pdf(
     - For structured extraction (extract_sections=True, return_format="json"): Use smaller chunk_size=5000-8000 to avoid token limits
     - For academic papers: LaTeX formulas are automatically fixed (CID placeholders, Greek letters, math symbols)
     - For multi-chunk reading: Reuse session_id from previous response for better performance
+    - For PDF with images: Set extract_images=True to extract all images from PDF (requires PyMuPDF)
     - IMPORTANT: Both text and json formats include has_more flag and pagination info
     - When has_more=True, continue reading with chunk=chunk+1 until has_more=False
     - Note: "chunk" parameter divides content by character count, "pdf_pages" shows actual PDF page count
@@ -480,6 +486,8 @@ async def read_pdf(
         extract_sections: Extract document sections/headings. Use for structured documents. Default: False.
         extract_tables: Extract table information. Default: False.
         extract_metadata: Extract file metadata (size, path, timestamp, PDF pages). Use with return_format="json". Default: False.
+        extract_images: Extract images from PDF. Saves images to output directory and returns image info. Default: False.
+        images_output_dir: Directory to save extracted images. If None, uses temporary directory. Default: None.
         preview_only: Return only first N lines without full conversion. Use for quick assessment. Default: False.
         preview_lines: Number of lines for preview mode. Default: 100.
         session_id: Session ID for resuming pagination. Reuse for consecutive chunk requests.
@@ -487,7 +495,7 @@ async def read_pdf(
 
     Returns:
         A dictionary containing the text content or error message.
-        If return_format='json', returns enhanced structure with metadata, sections, pagination_info, pdf_pages, session_id.
+        If return_format='json', returns enhanced structure with metadata, sections, pagination_info, pdf_pages, images, session_id.
     """
     # Apply parameter auto-fix for common naming mistakes
     local_vars = locals().copy()
@@ -502,6 +510,8 @@ async def read_pdf(
     extract_sections = fixed_params.get("extract_sections", extract_sections)
     extract_tables = fixed_params.get("extract_tables", extract_tables)
     extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
+    extract_images = fixed_params.get("extract_images", extract_images)
+    images_output_dir = fixed_params.get("images_output_dir", images_output_dir)
     preview_only = fixed_params.get("preview_only", preview_only)
     preview_lines = fixed_params.get("preview_lines", preview_lines)
     session_id = fixed_params.get("session_id", session_id)
@@ -586,7 +596,12 @@ async def read_pdf(
 
     try:
         # Get full content from converter (always extract metadata to get PDF page count)
-        result = PdfConverter(file_path, extract_metadata=True)
+        result = PdfConverter(
+            file_path,
+            extract_metadata=True,
+            extract_images=extract_images,
+            images_output_dir=images_output_dir
+        )
         full_content = result.text_content
 
         # Get PDF page count from metadata
@@ -621,6 +636,7 @@ async def read_pdf(
         metadata = {}
         sections = []
         tables = []
+        images = result.images if hasattr(result, 'images') else []
 
         if extract_metadata:
             metadata = {
@@ -629,6 +645,10 @@ async def read_pdf(
                 "file_size": os.path.getsize(file_path) if os.path.exists(file_path) else None,
                 "pdf_page_count": pdf_page_count,
             }
+            # Add image metadata if images were extracted
+            if extract_images and images:
+                metadata["image_count"] = len(images)
+                metadata["images_directory"] = images_output_dir or result.metadata.get("images_directory")
 
         if extract_sections:
             sections = extract_sections_from_text(full_content)
@@ -651,6 +671,7 @@ async def read_pdf(
                 "metadata": metadata,
                 "sections": sections,
                 "tables": tables,
+                "images": images if extract_images else [],
                 "pagination_info": {
                     "current_chunk": chunk if offset is None else None,
                     "total_chunks": max(1, (len(fixed_content) + char_limit - 1) // char_limit) if char_limit else 1,
@@ -678,6 +699,11 @@ async def read_pdf(
             # Return text format with pagination hints
             result_text = paginated_content
 
+            # Add image extraction info if requested
+            if extract_images and images:
+                images_info = f"\n\n[Extracted {len(images)} images from PDF. Use return_format='json' to see image details]"
+                result_text = images_info + "\n" + result_text
+
             # Add pagination hint if there's more content
             if has_more:
                 total_chars = len(fixed_content)
@@ -695,6 +721,7 @@ async def read_pdf(
                 "total_chars": len(fixed_content),
                 "current_chunk": chunk if offset is None else None,
                 "pdf_pages": pdf_page_count,
+                "image_count": len(images) if extract_images else 0,
             }
 
     except Exception as e:
