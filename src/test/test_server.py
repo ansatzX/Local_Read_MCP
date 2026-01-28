@@ -161,15 +161,15 @@ class TestProcessDocument:
             file_path=str(test_file),
             converter_func=converter,
             converter_kwargs={},
-            page=1,
-            page_size=10000,
+            chunk=1,
+            chunk_size=10000,
             return_format="json"
         )
         
         assert result["success"] is True
         assert len(result["text"]) == 10000
         assert result["pagination_info"]["has_more"] is True
-        assert result["pagination_info"]["total_pages"] == 5
+        assert result["pagination_info"]["total_chunks"] == 5
     
     @pytest.mark.asyncio
     async def test_process_document_preview_mode(self, tmp_path):

@@ -1,8 +1,3 @@
-################################################################################
-# Local Read MCP - Document Converters
-# Extracted from MiroThinker, excluding OpenAI dependencies
-################################################################################
-
 import json
 import logging
 import os

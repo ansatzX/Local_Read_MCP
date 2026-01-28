@@ -15,6 +15,7 @@ import time
 import hashlib
 import json
 import re
+import base64
 from typing import Dict, Any, Optional, List
 from fastmcp import FastMCP
 
@@ -39,6 +40,141 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastMCP server
 mcp = FastMCP("local_read_mcp-server")
+
+# Initialize config to check if vision features should be enabled
+from .config import get_config as _get_config
+_config = _get_config()
+VISION_ENABLED = _config.vision_enabled
+
+if VISION_ENABLED:
+    logger.info(f"Vision features ENABLED (model: {_config.model})")
+else:
+    logger.info("Vision features DISABLED - configure VISION_API_KEY or OPENAI_API_KEY in .env file to enable")
+
+
+# Vision helper functions
+def guess_mime_type_from_extension(file_path: str) -> str:
+    """Guess MIME type based on file extension."""
+    _, ext = os.path.splitext(file_path)
+    ext = ext.lower()
+    mime_types = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".gif": "image/gif",
+        ".webp": "image/webp", ".bmp": "image/bmp",
+        ".tiff": "image/tiff", ".tif": "image/tiff",
+    }
+    return mime_types.get(ext, "image/jpeg")
+
+
+async def call_vision_api(
+    image_path: str,
+    question: str,
+    api_key: str,
+    base_url: str,
+    model: str
+) -> str:
+    """Call OpenAI-compatible vision API (Doubao, GPT-4o, etc.)."""
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        return "Error: openai package not installed. Install with: pip install openai"
+
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+
+    with open(image_path, "rb") as f:
+        image_data = base64.b64encode(f.read()).decode("utf-8")
+
+    mime_type = guess_mime_type_from_extension(image_path)
+
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": question},
+            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_data}"}}
+        ]
+    }]
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=1024,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Vision API error: {e}")
+        return f"Error: Vision API call failed: {str(e)}"
+
+
+@mcp.tool()
+async def analyze_image(
+    image_path: str,
+    question: str = "Describe this image in detail. What type of content is it?",
+    api_key: Optional[str] = None
+) -> str:
+    """Analyze an image using OpenAI-compatible vision API.
+
+    Args:
+        image_path: Path to the image file to analyze
+        question: Question to ask about the image
+        api_key: API key (overrides config if provided)
+
+    Returns:
+        Answer from the vision model
+
+    Environment Variables (.env):
+        VISION_API_KEY: Your API key (or OPENAI_API_KEY)
+        VISION_BASE_URL: API base URL (or OPENAI_BASE_URL)
+        VISION_MODEL: Model name (or OPENAI_VISION_MODEL, default: gpt-4o)
+        VISION_MAX_IMAGE_SIZE_MB: Max image size in MB (default: 20)
+    """
+    if not VISION_ENABLED:
+        return "Vision is not enabled. Set VISION_API_KEY or OPENAI_API_KEY in .env file."
+
+    if not os.path.exists(image_path):
+        return f"Error: Image file not found: {image_path}"
+
+    # Check file size
+    file_size_mb = os.path.getsize(image_path) / (1024 * 1024)
+    max_size = _config.vision_max_image_size_mb
+    if file_size_mb > max_size:
+        return f"Error: Image too large ({file_size_mb:.2f}MB). Maximum: {max_size}MB"
+
+    # Use provided API key or config
+    effective_api_key = api_key or _config.api_key
+    if not effective_api_key:
+        return "Error: API key not configured. Set VISION_API_KEY or OPENAI_API_KEY in .env."
+
+    return await call_vision_api(
+        image_path=image_path,
+        question=question,
+        api_key=effective_api_key,
+        base_url=_config.base_url,
+        model=_config.model
+    )
+
+
+@mcp.tool()
+async def get_vision_status() -> Dict[str, Any]:
+    """Get vision server status and configuration.
+
+    Returns:
+        Status information about vision API configuration
+    """
+    return {
+        "vision_enabled": VISION_ENABLED,
+        "message": "Vision features available" if VISION_ENABLED else "Vision features not configured",
+        "suggestion": (
+            "Configure VISION_API_KEY and VISION_BASE_URL in .env file to enable vision features."
+            if not VISION_ENABLED else None
+        ),
+        "configured": {
+            "base_url": _config.base_url,
+            "model": _config.model,
+            "has_api_key": bool(_config.api_key),
+            "max_image_size_mb": _config.vision_max_image_size_mb,
+        } if VISION_ENABLED else None,
+    }
 
 
 # Helper functions for unified document processing
@@ -497,6 +633,11 @@ async def read_pdf(
         A dictionary containing the text content or error message.
         If return_format='json', returns enhanced structure with metadata, sections, pagination_info, pdf_pages, images, session_id.
     """
+    # Auto-enable extract_images if vision is configured and not explicitly set
+    if extract_images is None and VISION_ENABLED:
+        extract_images = True
+        logger.info("Vision enabled: auto-enabling extract_images=True for PDF")
+
     # Apply parameter auto-fix for common naming mistakes
     local_vars = locals().copy()
     fixed_params = fix_tool_arguments("read_pdf", local_vars)

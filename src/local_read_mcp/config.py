@@ -1,16 +1,14 @@
-"""
-Configuration management for Local Read MCP.
+# Copyright (c) 2025
+# This source code is licensed under MIT License.
 
-Handles loading environment variables from .env file with support for:
-- Custom .env file path via parameter
-- Default .env location at repository root
-- Fallback to system environment variables
+"""
+Configuration management for Local Read MCP server.
 """
 
 import os
+import logging
 from pathlib import Path
 from typing import Optional
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -19,82 +17,29 @@ _config = None
 
 
 class Config:
-    """Configuration container for Local Read MCP."""
+    """Configuration management for Local Read MCP server."""
 
-    def __init__(self, dotenv_path: Optional[str] = None):
+    def __init__(self, dotenv_path: Optional[Path] = None):
         """
-        Initialize configuration.
+        Initialize configuration from .env file.
 
         Args:
-            dotenv_path: Path to .env file. If None, uses default location (repo root/.env)
+            dotenv_path: Path to .env file (only used on first call or if reload=True)
         """
-        self.dotenv_path = self._resolve_dotenv_path(dotenv_path)
-        self._load_env()
+        self.dotenv_path = dotenv_path or Path.cwd()
+
+        # Initialize settings
         self._init_settings()
-
-    def _resolve_dotenv_path(self, dotenv_path: Optional[str]) -> Path:
-        """
-        Resolve .env file path.
-
-        Args:
-            dotenv_path: Custom path or None for default
-
-        Returns:
-            Path to .env file
-        """
-        if dotenv_path:
-            return Path(dotenv_path).resolve()
-
-        # Default: repository root/.env
-        # This file is in src/local_read_mcp/config.py
-        # Repository root is 2 levels up
-        repo_root = Path(__file__).parent.parent.parent
-        return repo_root / ".env"
-
-    def _load_env(self):
-        """Load environment variables from .env file if it exists."""
-        if self.dotenv_path.exists():
-            logger.info(f"Loading environment variables from: {self.dotenv_path}")
-            # Manual .env parsing (avoid external dependency on python-dotenv)
-            with open(self.dotenv_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    # Skip empty lines and comments
-                    if not line or line.startswith('#'):
-                        continue
-
-                    # Parse KEY=VALUE
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        key = key.strip()
-                        value = value.strip()
-
-                        # Remove quotes if present
-                        if value.startswith('"') and value.endswith('"'):
-                            value = value[1:-1]
-                        elif value.startswith("'") and value.endswith("'"):
-                            value = value[1:-1]
-
-                        # Set environment variable (only if not already set)
-                        if key not in os.environ:
-                            os.environ[key] = value
-        else:
-            logger.warning(f".env file not found at: {self.dotenv_path}")
-            logger.info("Using system environment variables only")
 
     def _init_settings(self):
         """Initialize settings from environment variables."""
-        # Vision API settings (for vision_server.py)
-        self.openai_api_key = os.environ.get("OPENAI_API_KEY")
-        self.openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        self.openai_model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")
-
-        # Ollama settings (local vision model)
-        self.ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        self.ollama_model = os.environ.get("OLLAMA_VISION_MODEL", "llava:13b")
+        # Vision API settings (for OpenAI-compatible APIs like Doubao)
+        # Uses simple naming as requested: api_key, base_url, model
+        self.api_key = os.environ.get("VISION_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        self.base_url = os.environ.get("VISION_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
+        self.model = os.environ.get("VISION_MODEL") or os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")
 
         # Vision settings
-        self.vision_default_provider = os.environ.get("VISION_DEFAULT_PROVIDER", "none")  # "none", "ollama", "openai"
         self.vision_max_image_size_mb = int(os.environ.get("VISION_MAX_IMAGE_SIZE_MB", "20"))
 
         # PDF processing settings
@@ -108,21 +53,37 @@ class Config:
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
 
+        # Determine if vision features are enabled
+        self._vision_enabled = self._check_vision_enabled()
+
+    def _check_vision_enabled(self) -> bool:
+        """
+        Check if vision features are enabled based on configuration.
+
+        Vision is enabled if API_KEY is set.
+        """
+        return bool(self.api_key)
+
+    @property
+    def vision_enabled(self) -> bool:
+        """Get whether vision features are enabled."""
+        return self._vision_enabled
+
     def __repr__(self):
         """String representation of config (hide sensitive data)."""
         return (
             f"Config(\n"
             f"  dotenv_path={self.dotenv_path},\n"
-            f"  openai_api_key={'***' if self.openai_api_key else 'Not Set'},\n"
-            f"  openai_base_url={self.openai_base_url},\n"
-            f"  ollama_base_url={self.ollama_base_url},\n"
-            f"  vision_default_provider={self.vision_default_provider},\n"
+            f"  api_key={'***' if self.api_key else 'Not Set'},\n"
+            f"  base_url={self.base_url},\n"
+            f"  model={self.model},\n"
+            f"  vision_enabled={self.vision_enabled},\n"
             f"  pdf_extract_images_default={self.pdf_extract_images_default}\n"
             f")"
         )
 
 
-def get_config(dotenv_path: Optional[str] = None, reload: bool = False) -> Config:
+def get_config(dotenv_path: Optional[Path] = None, reload: bool = False) -> Config:
     """
     Get global configuration instance.
 
@@ -134,8 +95,6 @@ def get_config(dotenv_path: Optional[str] = None, reload: bool = False) -> Confi
         Config instance
     """
     global _config
-
     if _config is None or reload:
         _config = Config(dotenv_path=dotenv_path)
-
     return _config
