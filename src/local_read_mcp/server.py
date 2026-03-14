@@ -34,11 +34,12 @@ from .converters import (
     MarkItDownConverter,
     extract_sections_from_markdown,
     apply_content_limit,
+    generate_session_id,
+    fix_latex_formulas,
 )
 from .server.vision import guess_mime_type_from_extension, call_vision_api
 from .server.utils import (
     apply_pagination,
-    generate_session_id,
     fix_tool_arguments,
     DuplicateDetector,
     duplicate_detector,
@@ -510,10 +511,15 @@ async def read_pdf(
         images = result.images if hasattr(result, 'images') else []
 
         if extract_metadata:
+            file_size = None
+            try:
+                file_size = os.path.getsize(file_path)
+            except (OSError, Exception):
+                pass
             metadata = {
                 "title": result.title,
                 "file_path": file_path,
-                "file_size": os.path.getsize(file_path) if os.path.exists(file_path) else None,
+                "file_size": file_size,
                 "pdf_page_count": pdf_page_count,
             }
             # Add image metadata if images were extracted
@@ -522,7 +528,7 @@ async def read_pdf(
                 metadata["images_directory"] = images_output_dir or result.metadata.get("images_directory")
 
         if extract_sections:
-            sections = extract_sections_from_text(full_content)
+            sections = extract_sections_from_markdown(full_content)
 
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)

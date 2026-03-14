@@ -49,9 +49,14 @@ def XlsxConverter(
         if extract_metadata:
             # Collect workbook metadata
             sheet_names = wb.sheetnames
+            file_size = None
+            try:
+                file_size = os.path.getsize(local_path)
+            except (OSError, Exception):
+                pass
             metadata = {
                 "file_path": local_path,
-                "file_size": os.path.getsize(local_path) if os.path.exists(local_path) else None,
+                "file_size": file_size,
                 "file_extension": os.path.splitext(local_path)[1],
                 "conversion_timestamp": time.time(),
                 "sheet_count": len(sheet_names),

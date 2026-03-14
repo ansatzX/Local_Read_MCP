@@ -225,3 +225,6 @@ uv.lock
 
 # Temporary archive directory
 tmp_archive/
+
+# Claude Code
+.claude/

@@ -1,6 +1,5 @@
 """Server utility functions for the Local Read MCP Server."""
 
-import hashlib
 import logging
 import os
 import time
@@ -23,13 +22,6 @@ def apply_pagination(content: str, offset: int, limit: Optional[int]) -> tuple[s
         end = min(offset + limit, len(content))
         return content[offset:end], end < len(content)
     return content[offset:], False
-
-
-def generate_session_id(file_path: str, prefix: str = "session") -> str:
-    """Generate a unique session ID for a file."""
-    file_hash = hashlib.md5(file_path.encode()).hexdigest()[:8]
-    timestamp = int(time.time())
-    return f"{prefix}_{file_hash}_{timestamp}"
 
 
 def fix_tool_arguments(tool_name: str, arguments: dict) -> dict:
@@ -97,18 +89,43 @@ class DuplicateDetector:
 
     Attributes:
         max_repeats: Maximum number of times a chunk can be requested before warning
+        max_sessions: Maximum number of sessions to keep in cache (LRU cleanup)
         request_cache: Dictionary mapping session_id to file+chunk request counts
+        session_last_access: Dictionary tracking last access time for each session
     """
 
-    def __init__(self, max_repeats: int = 3):
+    def __init__(self, max_repeats: int = 3, max_sessions: int = 100):
         """
         Initialize the duplicate detector.
 
         Args:
             max_repeats: Maximum allowed repeats before warning (default: 3)
+            max_sessions: Maximum number of sessions to keep in cache (default: 100)
         """
         self.max_repeats = max_repeats
+        self.max_sessions = max_sessions
         self.request_cache: Dict[str, Dict[str, int]] = {}
+        self.session_last_access: Dict[str, float] = {}
+
+    def _cleanup_old_sessions(self):
+        """Clean up oldest sessions if we exceed max_sessions limit."""
+        if len(self.request_cache) <= self.max_sessions:
+            return
+
+        # Sort sessions by last access time (oldest first)
+        sorted_sessions = sorted(
+            self.session_last_access.items(),
+            key=lambda x: x[1]
+        )
+
+        # Remove oldest sessions
+        sessions_to_remove = len(self.request_cache) - self.max_sessions
+        for session_id, _ in sorted_sessions[:sessions_to_remove]:
+            if session_id in self.request_cache:
+                del self.request_cache[session_id]
+            if session_id in self.session_last_access:
+                del self.session_last_access[session_id]
+            logger.debug(f"[Duplicate Detection] Cleaned up old session: {session_id[:8]}...")
 
     def check_and_record(
         self,
@@ -138,6 +155,12 @@ class DuplicateDetector:
             >>> detector.check_and_record("sess1", "/file.pdf", 1, 10000)
             "Warning: This chunk has been requested 3 times..."
         """
+        # Clean up old sessions if needed
+        self._cleanup_old_sessions()
+
+        # Update session last access time
+        self.session_last_access[session_id] = time.time()
+
         # Create cache key: file_path + chunk + chunk_size
         cache_key = f"{file_path}:chunk{chunk}:size{chunk_size}"
 
@@ -182,7 +205,9 @@ class DuplicateDetector:
         """
         if session_id in self.request_cache:
             del self.request_cache[session_id]
-            logger.info(f"[Duplicate Detection] Cleared session {session_id[:8]}...")
+        if session_id in self.session_last_access:
+            del self.session_last_access[session_id]
+        logger.info(f"[Duplicate Detection] Cleared session {session_id[:8]}...")
 
     def get_session_stats(self, session_id: str) -> Dict[str, int]:
         """
@@ -198,7 +223,7 @@ class DuplicateDetector:
 
 
 # Global duplicate detector instance
-duplicate_detector = DuplicateDetector(max_repeats=3)
+duplicate_detector = DuplicateDetector(max_repeats=3, max_sessions=100)
 
 
 def create_simple_converter_wrapper(converter_func, converter_name: str = ""):
@@ -220,9 +245,14 @@ def create_simple_converter_wrapper(converter_func, converter_name: str = ""):
 
         # If extract_metadata is requested, add file metadata
         if kwargs.get('extract_metadata', False):
+            file_size = None
+            try:
+                file_size = os.path.getsize(file_path)
+            except (OSError, Exception):
+                pass
             result.metadata = {
                 "file_path": file_path,
-                "file_size": os.path.getsize(file_path) if os.path.exists(file_path) else None,
+                "file_size": file_size,
                 "file_extension": os.path.splitext(file_path)[1],
             }
 

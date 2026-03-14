@@ -7,7 +7,6 @@ from .base import (
     csv_module,
     MarkItDown
 )
-from .utils import apply_content_limit
 
 
 def TextConverter(local_path: str) -> DocumentConverterResult:
@@ -22,7 +21,6 @@ def TextConverter(local_path: str) -> DocumentConverterResult:
     """
     with open(local_path, "r", encoding="utf-8") as f:
         text_content = f.read()
-    text_content = apply_content_limit(text_content)
     return DocumentConverterResult(title=None, text_content=text_content)
 
 
@@ -40,7 +38,6 @@ def JsonConverter(local_path: str) -> DocumentConverterResult:
         text_content = json.dumps(
             json.load(f), ensure_ascii=False, indent=2
         )
-    text_content = apply_content_limit(text_content)
     return DocumentConverterResult(title=None, text_content=text_content)
 
 
@@ -63,7 +60,6 @@ def YamlConverter(local_path: str) -> DocumentConverterResult:
     with open(local_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
         text_content = yaml.dump(data, allow_unicode=True, default_flow_style=False)
-    text_content = apply_content_limit(text_content)
     return DocumentConverterResult(title=None, text_content=text_content)
 
 
@@ -90,7 +86,6 @@ def CsvConverter(local_path: str) -> DocumentConverterResult:
         if i == 0:  # Add a separator after header
             md_content += "|" + "---|" * len(row) + "\n"
 
-    md_content = apply_content_limit(md_content)
     return DocumentConverterResult(title=None, text_content=md_content)
 
 
@@ -112,6 +107,6 @@ def MarkItDownConverter(local_path: str) -> DocumentConverterResult:
 
     md = MarkItDown(enable_plugins=True)
     result = md.convert(local_path)
-    text_content = apply_content_limit(result.text_content) if hasattr(result, 'text_content') else ""
+    text_content = result.text_content if hasattr(result, 'text_content') else ""
     title = result.title if hasattr(result, 'title') else None
     return DocumentConverterResult(title=title, text_content=text_content)

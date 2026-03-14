@@ -1,30 +1,29 @@
 import os
-import time
 
 from .base import (
     DocumentConverterResult,
-    _CustomMarkdownify,
-    BeautifulSoup,
     mammoth
 )
-from .utils import apply_content_limit, extract_sections_from_markdown
+from .utils import html_to_markdown_result
 
 
 def DocxConverter(
     local_path: str,
     extract_metadata: bool = False,
-    extract_sections: bool = False
+    extract_sections: bool = False,
+    extract_tables: bool = False
 ) -> DocumentConverterResult:
     """
     Convert a DOCX file to Markdown format with enhanced features.
 
     Uses mammoth library to first convert DOCX to HTML, then converts
-    the HTML to Markdown.
+    the HTML to Markdown using the shared html_to_markdown_result helper.
 
     Args:
         local_path: Path to the DOCX file to convert.
         extract_metadata: Whether to extract metadata (file size, etc.)
         extract_sections: Whether to extract sections from content
+        extract_tables: Whether to extract tables (not implemented yet)
 
     Returns:
         DocumentConverterResult containing the converted Markdown text and optional metadata/sections.
@@ -35,72 +34,19 @@ def DocxConverter(
             text_content="[Error: mammoth not installed]",
             error="mammoth not installed"
         )
-    if BeautifulSoup is None:
-        return DocumentConverterResult(
-            title=None,
-            text_content="[Error: beautifulsoup4 not installed]",
-            error="beautifulsoup4 not installed"
-        )
-    if _CustomMarkdownify is None:
-        return DocumentConverterResult(
-            title=None,
-            text_content="[Error: markdownify not installed]",
-            error="markdownify not installed"
-        )
 
     try:
         with open(local_path, "rb") as docx_file:
             result = mammoth.convert_to_html(docx_file)
             html_content = result.value
 
-        # Convert HTML to markdown
-        soup = BeautifulSoup(html_content, "html.parser")
-        for script in soup(["script", "style"]):
-            script.extract()
-
-        body_elm = soup.find("body")
-        webpage_text = ""
-        if body_elm:
-            webpage_text = _CustomMarkdownify().convert_soup(body_elm)
-        else:
-            webpage_text = _CustomMarkdownify().convert_soup(soup)
-
-        assert isinstance(webpage_text, str)
-
-        # Apply content limit
-        webpage_text = apply_content_limit(webpage_text)
-
-        # Prepare metadata
-        metadata = {}
-        sections = []
-
-        if extract_metadata:
-            metadata = {
-                "file_path": local_path,
-                "file_size": os.path.getsize(local_path) if os.path.exists(local_path) else None,
-                "file_extension": os.path.splitext(local_path)[1],
-                "conversion_timestamp": time.time()
-            }
-
-        if extract_sections:
-            sections = extract_sections_from_markdown(webpage_text)
-
-        # Get title from HTML or use filename
-        title = None
-        if soup.title and soup.title.string:
-            title = soup.title.string
-        else:
-            # Use filename without extension as fallback
-            filename = os.path.basename(local_path)
-            title = os.path.splitext(filename)[0]
-
-        return DocumentConverterResult(
-            title=title,
-            text_content=webpage_text,
-            metadata=metadata,
-            sections=sections,
-            tables=[],  # DOCX tables not extracted in basic version
-            processing_time_ms=None
+        # Use shared helper function for HTML processing
+        return html_to_markdown_result(
+            html_content=html_content,
+            file_path=local_path,
+            extract_metadata=extract_metadata,
+            extract_sections=extract_sections,
+            extract_tables=extract_tables
         )
 
     except Exception as e:

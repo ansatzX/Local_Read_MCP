@@ -15,7 +15,8 @@ from .utils import (
     generate_session_id,
     apply_content_limit,
     extract_sections_from_markdown,
-    fix_latex_formulas
+    fix_latex_formulas,
+    html_to_markdown_result
 )
 
 from .html import HtmlConverter, convert_html_to_md
@@ -40,6 +41,7 @@ __all__ = [
     "apply_content_limit",
     "extract_sections_from_markdown",
     "fix_latex_formulas",
+    "html_to_markdown_result",
 
     # Converters
     "HtmlConverter",

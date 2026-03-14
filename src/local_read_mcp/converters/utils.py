@@ -1,9 +1,10 @@
 import hashlib
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from .base import DocumentConverterResult
+from .base import DocumentConverterResult, BeautifulSoup, _CustomMarkdownify
 
 
 class PaginationManager:
@@ -137,6 +138,14 @@ def extract_sections_from_markdown(content: str) -> List[Dict[str, Any]]:
     current_section = None
     section_content = []
 
+    # Pre-calculate line start positions for O(n) performance
+    line_start_positions = [0] * len(lines)
+    current_pos = 0
+    for i, line in enumerate(lines):
+        line_start_positions[i] = current_pos
+        current_pos += len(line) + 1  # +1 for newline
+    total_chars = current_pos - 1 if lines else 0
+
     for i, line in enumerate(lines):
         line_stripped = line.strip()
         if line_stripped.startswith('#'):
@@ -148,8 +157,8 @@ def extract_sections_from_markdown(content: str) -> List[Dict[str, Any]]:
                     "content": '\n'.join(section_content).strip(),
                     "start_line": current_section['start_line'],
                     "end_line": i - 1,
-                    "char_start": current_section.get('char_start', 0),
-                    "char_end": current_section.get('char_end', 0)
+                    "char_start": current_section['char_start'],
+                    "char_end": line_start_positions[i] - 1 if i > 0 else 0
                 })
 
             # Start new section
@@ -159,7 +168,7 @@ def extract_sections_from_markdown(content: str) -> List[Dict[str, Any]]:
                 'heading': heading_text,
                 'level': level,
                 'start_line': i,
-                'char_start': sum(len(l) + 1 for l in lines[:i])  # +1 for newline
+                'char_start': line_start_positions[i]
             }
             section_content = []
         elif current_section is not None:
@@ -173,8 +182,8 @@ def extract_sections_from_markdown(content: str) -> List[Dict[str, Any]]:
             "content": '\n'.join(section_content).strip(),
             "start_line": current_section['start_line'],
             "end_line": len(lines) - 1,
-            "char_start": current_section.get('char_start', 0),
-            "char_end": sum(len(line) + 1 for line in lines) - 1
+            "char_start": current_section['char_start'],
+            "char_end": total_chars
         })
 
     return sections
@@ -341,3 +350,101 @@ def fix_latex_formulas(content: str) -> str:
     content = re.sub(r'_\{([a-zA-Z])\}', r'_\1', content)  # _{x} → _x
 
     return content
+
+
+def html_to_markdown_result(
+    html_content: str,
+    file_path: str,
+    extract_metadata: bool = False,
+    extract_sections: bool = False,
+    extract_tables: bool = False
+) -> DocumentConverterResult:
+    """Convert HTML content to a full DocumentConverterResult with enhanced features.
+
+    This shared function handles the common logic for both HtmlConverter and DocxConverter:
+    - BeautifulSoup parsing and script/style removal
+    - Markdown conversion via _CustomMarkdownify
+    - Content limiting
+    - Metadata extraction
+    - Sections extraction
+    - Title fallback from filename
+
+    Args:
+        html_content: Raw HTML content string
+        file_path: Path to the original file (for metadata and title fallback)
+        extract_metadata: Whether to extract file metadata
+        extract_sections: Whether to extract sections from markdown
+        extract_tables: Whether to extract tables (not implemented yet)
+
+    Returns:
+        DocumentConverterResult with converted content and optional metadata/sections
+    """
+    from .base import BeautifulSoup, _CustomMarkdownify
+
+    if BeautifulSoup is None:
+        return DocumentConverterResult(
+            title=None,
+            text_content="[Error: beautifulsoup4 not installed]",
+            error="beautifulsoup4 not installed"
+        )
+    if _CustomMarkdownify is None:
+        return DocumentConverterResult(
+            title=None,
+            text_content="[Error: markdownify not installed]",
+            error="markdownify not installed"
+        )
+
+    # Parse HTML and remove scripts/styles
+    soup = BeautifulSoup(html_content, "html.parser")
+    for script in soup(["script", "style"]):
+        script.extract()
+
+    # Convert to markdown
+    body_elm = soup.find("body")
+    if body_elm:
+        webpage_text = _CustomMarkdownify().convert_soup(body_elm)
+    else:
+        webpage_text = _CustomMarkdownify().convert_soup(soup)
+
+    assert isinstance(webpage_text, str)
+
+    # Apply content limit
+    webpage_text = apply_content_limit(webpage_text)
+
+    # Prepare metadata
+    metadata = {}
+    sections = []
+
+    if extract_metadata:
+        file_size = None
+        try:
+            file_size = os.path.getsize(file_path)
+        except (OSError, Exception):
+            pass
+        metadata = {
+            "file_path": file_path,
+            "file_size": file_size,
+            "file_extension": os.path.splitext(file_path)[1],
+            "conversion_timestamp": time.time()
+        }
+
+    if extract_sections:
+        sections = extract_sections_from_markdown(webpage_text)
+
+    # Get title from HTML or use filename
+    title = None
+    if soup.title and soup.title.string:
+        title = soup.title.string
+    else:
+        # Use filename without extension as fallback
+        filename = os.path.basename(file_path)
+        title = os.path.splitext(filename)[0]
+
+    return DocumentConverterResult(
+        title=title,
+        text_content=webpage_text,
+        metadata=metadata,
+        sections=sections,
+        tables=[],  # Tables not extracted in basic version
+        processing_time_ms=None
+    )

@@ -52,9 +52,6 @@ def extract_pdf_images(
             "Install with: pip install pymupdf"
         )
 
-    if not os.path.exists(pdf_path):
-        raise FileNotFoundError(f"PDF file not found: {pdf_path}")
-
     # Create output directory if needed
     if output_dir is None:
         output_dir = tempfile.mkdtemp(prefix="pdf_images_")
@@ -202,9 +199,14 @@ def PdfConverter(
         images = []
 
         if extract_metadata:
+            file_size = None
+            try:
+                file_size = os.path.getsize(local_path)
+            except (OSError, Exception):
+                pass
             metadata = {
                 "file_path": local_path,
-                "file_size": os.path.getsize(local_path) if os.path.exists(local_path) else None,
+                "file_size": file_size,
                 "file_extension": os.path.splitext(local_path)[1],
                 "conversion_timestamp": time.time(),
                 "pdf_page_count": pdf_page_count,  # Add actual PDF page count
