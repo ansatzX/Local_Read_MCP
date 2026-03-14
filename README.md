@@ -2,6 +2,14 @@
 
 Model Context Protocol server for local document processing with vision support.
 
+## Recent Improvements (2026-03-14)
+
+- **Performance Optimized**: `extract_sections_from_markdown` improved from O(n²) to O(n)
+- **More Secure**: Fixed TOCTOU (Time-of-check to time-of-use) security vulnerabilities
+- **Memory Efficient**: Added LRU cleanup to `DuplicateDetector` to prevent memory leaks
+- **Cleaner Code**: Massive refactoring with better code reuse (-1,668 lines net)
+- **Backward Compatible**: All existing tools and parameters work the same way
+
 ## Features
 
 - **Local Processing**: No cloud services required for document conversion
