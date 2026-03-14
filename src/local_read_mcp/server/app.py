@@ -19,7 +19,7 @@ import base64
 from typing import Dict, Any, Optional, List
 from fastmcp import FastMCP
 
-from .converters import (
+from ..converters import (
     DocumentConverterResult,
     PdfConverter,
     DocxConverter,
@@ -37,8 +37,8 @@ from .converters import (
     generate_session_id,
     fix_latex_formulas,
 )
-from .server.vision import guess_mime_type_from_extension, call_vision_api
-from .server.utils import (
+from .vision import guess_mime_type_from_extension, call_vision_api
+from .utils import (
     apply_pagination,
     fix_tool_arguments,
     DuplicateDetector,
@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("local_read_mcp-server")
 
 # Initialize config to check if vision features should be enabled
-from .config import get_config as _get_config
+from ..config import get_config as _get_config
 _config = _get_config()
 VISION_ENABLED = _config.vision_enabled
 

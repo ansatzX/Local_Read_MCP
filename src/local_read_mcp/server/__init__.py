@@ -1,9 +1,7 @@
 # Local Read MCP Server
 # A Model Context Protocol server for document processing
 
-# The main server implementation remains in the parent file for now
-# due to the tight coupling with FastMCP decorators.
-
+from .app import mcp, main
 from .vision import guess_mime_type_from_extension, call_vision_api
 from .utils import (
     apply_pagination,
@@ -14,6 +12,10 @@ from .utils import (
 )
 
 __all__ = [
+    # Main server
+    "mcp",
+    "main",
+
     # Vision
     "guess_mime_type_from_extension",
     "call_vision_api",
