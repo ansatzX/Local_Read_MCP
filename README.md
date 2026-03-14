@@ -48,7 +48,7 @@ VISION_MODEL=gpt-4o
 **Alternative variable names** (for compatibility):
 - `OPENAI_API_KEY` instead of `VISION_API_KEY`
 - `OPENAI_BASE_URL` instead of `VISION_BASE_URL`
-- `OPENAI_VISIONAPI_MODEL` instead of `VISION_MODEL`
+- `OPENAI_VISION_MODEL` instead of `VISION_MODEL`
 
 ### Claude Code Setup
 
