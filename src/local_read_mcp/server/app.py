@@ -344,6 +344,11 @@ async def read_pdf(
     - Note: "chunk" parameter divides content by character count, "pdf_pages" shows actual PDF page count
     - WARNING: Large chunk_size (>10k) with extract_sections=True may exceed token limits in JSON format
 
+    TEMPORARY FILES NOTICE:
+    - When extract_images=True, images are saved to temporary directory (/tmp/pdf_images_*) or images_output_dir if specified
+    - These image files are NOT automatically deleted after use
+    - IMPORTANT: After completing your task and confirming no further need for the images, use cleanup_temp_files tool to delete them
+
     Args:
         file_path: The path to the PDF file to read
         chunk: Chunk number for content pagination (1-indexed). Default: 1.
@@ -1262,6 +1267,11 @@ async def read_zip(
 
     Supports pagination, structured extraction, and session management.
 
+    TEMPORARY FILES NOTICE:
+    - ZIP files are extracted to temporary directory (/tmp/zip_extract_*) during processing
+    - These temporary files are usually deleted automatically, but cleanup may fail in some cases
+    - IMPORTANT: After completing your task, use cleanup_temp_files tool to ensure all temporary files are removed
+
     Args:
         file_path: The path to the ZIP file to read
         page: Page number for pagination (1-indexed). Default: 1.
@@ -1448,6 +1458,132 @@ async def get_supported_formats() -> Dict[str, Any]:
             "markitdown": "MarkItDown fallback - supports many additional formats",
         },
     }
+
+
+@mcp.tool()
+async def cleanup_temp_files(
+    older_than_hours: Optional[int] = 24,
+    dry_run: Optional[bool] = False,
+    cleanup_pdf_images: Optional[bool] = True,
+    cleanup_zip_extracts: Optional[bool] = True,
+    custom_directory: Optional[str] = None
+) -> Dict[str, Any]:
+    """Clean up temporary files created by Local Read MCP tools.
+
+    Use this tool after completing your tasks and confirming no further need for temporary files.
+
+    Args:
+        older_than_hours: Only clean up files older than this many hours. Default: 24
+        dry_run: If True, only show what would be deleted without actually deleting. Default: False
+        cleanup_pdf_images: Clean up PDF image extraction directories. Default: True
+        cleanup_zip_extracts: Clean up ZIP extraction directories. Default: True
+        custom_directory: Optional custom directory to clean up (in addition to temp dirs)
+
+    Returns:
+        Dictionary with cleanup results including number of files/directories deleted
+    """
+    import shutil
+    import tempfile
+    from datetime import datetime
+
+    logger = logging.getLogger(__name__)
+
+    temp_dir = tempfile.gettempdir()
+    cutoff_time = datetime.now().timestamp() - (older_than_hours * 3600) if older_than_hours else 0
+
+    deleted_files = 0
+    deleted_dirs = 0
+    errors = []
+    scanned_dirs = []
+
+    # Directories to clean up (prefix patterns)
+    target_patterns = []
+    if cleanup_pdf_images:
+        target_patterns.append("pdf_images_")
+    if cleanup_zip_extracts:
+        target_patterns.append("zip_extract_")
+
+    def is_old_enough(path: str) -> bool:
+        """Check if file/directory is older than cutoff time."""
+        if older_than_hours == 0:
+            return True
+        try:
+            mtime = os.path.getmtime(path)
+            return mtime < cutoff_time
+        except Exception:
+            return False  # If we can't get mtime, skip
+
+    def delete_path(path: str, is_dir: bool) -> bool:
+        """Delete a file or directory."""
+        nonlocal deleted_files, deleted_dirs
+        try:
+            if dry_run:
+                logger.info(f"[Dry run] Would delete: {path}")
+                return True
+            if is_dir:
+                shutil.rmtree(path)
+                deleted_dirs += 1
+            else:
+                os.remove(path)
+                deleted_files += 1
+            return True
+        except Exception as e:
+            error_msg = f"Failed to delete {path}: {e}"
+            logger.warning(error_msg)
+            errors.append(error_msg)
+            return False
+
+    # Scan temp directory for matching directories
+    try:
+        for item in os.listdir(temp_dir):
+            item_path = os.path.join(temp_dir, item)
+            if os.path.isdir(item_path):
+                # Check if directory matches any of our patterns
+                for pattern in target_patterns:
+                    if item.startswith(pattern):
+                        scanned_dirs.append(item_path)
+                        if is_old_enough(item_path):
+                            delete_path(item_path, is_dir=True)
+                        break
+    except Exception as e:
+        error_msg = f"Error scanning temp directory {temp_dir}: {e}"
+        logger.error(error_msg)
+        errors.append(error_msg)
+
+    # Clean up custom directory if provided
+    if custom_directory and os.path.exists(custom_directory):
+        if os.path.isdir(custom_directory):
+            scanned_dirs.append(custom_directory)
+            if is_old_enough(custom_directory):
+                delete_path(custom_directory, is_dir=True)
+        else:
+            if is_old_enough(custom_directory):
+                delete_path(custom_directory, is_dir=False)
+
+    # Prepare result
+    result = {
+        "success": True,
+        "dry_run": dry_run,
+        "older_than_hours": older_than_hours,
+        "deleted": {
+            "files": deleted_files,
+            "directories": deleted_dirs,
+            "total": deleted_files + deleted_dirs
+        },
+        "scanned_directories": scanned_dirs,
+        "temp_directory": temp_dir
+    }
+
+    if errors:
+        result["errors"] = errors
+        result["success"] = False
+
+    if dry_run:
+        result["message"] = "Dry run completed - no files were actually deleted"
+    else:
+        result["message"] = f"Cleaned up {deleted_files} files and {deleted_dirs} directories"
+
+    return result
 
 
 def main():

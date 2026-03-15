@@ -89,6 +89,7 @@ Restart Claude Code to load the server.
 | `get_supported_formats`  | List all supported formats        | -                            |
 | `analyze_image`          | Analyze images with vision API  | .jpg, .png, .gif, etc.    |
 | `get_vision_status`      | Check vision configuration       | -                            |
+| `cleanup_temp_files`     | Clean up temporary files         | -                            |
 
 ### Common Parameters
 
@@ -162,6 +163,25 @@ if status["vision_enabled"]:
     result = analyze_image("/path/to/chart.png", "Describe this chart")
 ```
 
+### Temporary Files Cleanup
+
+```python
+# Dry run - see what would be deleted without actually deleting
+cleanup_temp_files(dry_run=True)
+
+# Clean up temporary files older than 24 hours (default)
+cleanup_temp_files()
+
+# Clean up all temporary files immediately
+cleanup_temp_files(older_than_hours=0)
+
+# Clean up only PDF image extraction directories
+cleanup_temp_files(cleanup_zip_extracts=False)
+
+# Clean up a custom directory in addition to temp dirs
+cleanup_temp_files(custom_directory="/path/to/your/dir")
+```
+
 ## Development
 
 ```bash
@@ -199,6 +219,12 @@ MIT License
 - HTML文件 -> 使用 `read_html` 工具
 - ZIP压缩包 -> 使用 `read_zip` 工具
 
+### 临时文件清理
+
+- **重要**: 使用 `read_pdf(extract_images=True)` 或 `read_zip` 后会产生临时文件
+- **任务结束后**: 确认用户不再需要这些文件时，使用 `cleanup_temp_files` 工具清理
+- 默认清理24小时前的文件，可使用 `older_than_hours=0` 立即清理所有
+
 ### 严格禁止
 
 - **绝对不要**使用Read工具读取上述二进制文件(会得到乱码)
@@ -226,6 +252,12 @@ When reading document files, **strictly follow these rules**:
 - PowerPoint -> Use `read_powerpoint` tool
 - HTML files -> Use `read_html` tool
 - ZIP archives -> Use `read_zip` tool
+
+### Temporary Files Cleanup
+
+- **IMPORTANT**: Using `read_pdf(extract_images=True)` or `read_zip` creates temporary files
+- **After task completion**: When user confirms no further need for these files, use `cleanup_temp_files` tool to clean up
+- Default cleans files older than 24 hours, use `older_than_hours=0` to clean all immediately
 
 ### Strictly Prohibited
 
