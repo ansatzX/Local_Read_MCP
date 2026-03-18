@@ -36,6 +36,10 @@ from ..converters import (
     apply_content_limit,
     generate_session_id,
     fix_latex_formulas,
+    inspect_pdf,
+    render_pdf_to_images,
+    extract_form_fields,
+    extract_tables,
 )
 from .vision import guess_mime_type_from_extension, call_vision_api
 from .utils import (
@@ -60,6 +64,42 @@ if VISION_ENABLED:
     logger.info(f"Vision features ENABLED (model: {_config.model})")
 else:
     logger.info("Vision features DISABLED - configure VISION_API_KEY or OPENAI_API_KEY in .env file to enable")
+
+
+def detect_format(file_path: str) -> Optional[str]:
+    """Detect file format from extension.
+
+    Returns:
+        Format string or None for unknown (use markitdown fallback)
+    """
+    ext = os.path.splitext(file_path)[1].lower()
+
+    # Text formats
+    if ext in ['.txt', '.md', '.py', '.sh', '.log', '.rst']:
+        return 'text'
+    elif ext == '.json':
+        return 'json'
+    elif ext == '.csv':
+        return 'csv'
+    elif ext in ['.yaml', '.yml']:
+        return 'yaml'
+
+    # Binary/document formats
+    elif ext == '.pdf':
+        return 'pdf'
+    elif ext in ['.docx', '.doc']:
+        return 'word'
+    elif ext in ['.xlsx', '.xls']:
+        return 'excel'
+    elif ext in ['.pptx', '.ppt']:
+        return 'ppt'
+    elif ext in ['.html', '.htm']:
+        return 'html'
+    elif ext == '.zip':
+        return 'zip'
+
+    # Unknown - use markitdown fallback
+    return None
 
 
 @mcp.tool()
@@ -324,13 +364,20 @@ async def read_pdf(
     extract_tables: Optional[bool] = False,
     extract_metadata: Optional[bool] = False,
     extract_images: Optional[bool] = False,
+    # New parameters
+    render_images: Optional[bool] = False,
+    render_dpi: Optional[int] = 200,
+    render_format: Optional[str] = "png",
+    extract_forms: Optional[bool] = False,
+    inspect_struct: Optional[bool] = False,
+    include_coords: Optional[bool] = False,
     images_output_dir: Optional[str] = None,
     preview_only: Optional[bool] = False,
     preview_lines: Optional[int] = 100,
     session_id: Optional[str] = None,
     return_format: Optional[str] = "text"
 ) -> Dict[str, Any]:
-    """Read and convert a PDF file to markdown text with LaTeX formula fixing.
+    """Read PDF file with comprehensive feature support.
 
     USAGE STRATEGY:
     - For unknown file size: Start with preview_only=True, preview_lines=100 to assess content
@@ -344,8 +391,15 @@ async def read_pdf(
     - Note: "chunk" parameter divides content by character count, "pdf_pages" shows actual PDF page count
     - WARNING: Large chunk_size (>10k) with extract_sections=True may exceed token limits in JSON format
 
+    New features enabled via parameters:
+    - render_images: Render pages to images for visual inspection
+    - extract_tables: Extract tables (requires pdfplumber)
+    - extract_forms: Extract form fields with types/values/positions
+    - inspect_struct: Get complete structure/metadata/outline/fonts
+    - include_coords: Include bounding box coordinates with text
+
     TEMPORARY FILES NOTICE:
-    - When extract_images=True, images are saved to temporary directory (/tmp/pdf_images_*) or images_output_dir if specified
+    - When extract_images=True or render_images=True, images are saved to temporary directory (/tmp/pdf_images_* or /tmp/pdf_render_*) or images_output_dir if specified
     - These image files are NOT automatically deleted after use
     - IMPORTANT: After completing your task and confirming no further need for the images, use cleanup_temp_files tool to delete them
 
@@ -359,7 +413,13 @@ async def read_pdf(
         extract_tables: Extract table information. Default: False.
         extract_metadata: Extract file metadata (size, path, timestamp, PDF pages). Use with return_format="json". Default: False.
         extract_images: Extract images from PDF. Saves images to output directory and returns image info. Default: False.
-        images_output_dir: Directory to save extracted images. If None, uses temporary directory. Default: None.
+        render_images: Render PDF pages to images. Default: False.
+        render_dpi: DPI for rendered images. Default: 200.
+        render_format: Format for rendered images (png or jpeg). Default: png.
+        extract_forms: Extract form fields from PDF. Default: False.
+        inspect_struct: Get complete PDF structure (metadata, outline, fonts, etc.). Default: False.
+        include_coords: Include text with bounding box coordinates. Default: False.
+        images_output_dir: Directory to save extracted/rendered images. If None, uses temporary directory. Default: None.
         preview_only: Return only first N lines without full conversion. Use for quick assessment. Default: False.
         preview_lines: Number of lines for preview mode. Default: 100.
         session_id: Session ID for resuming pagination. Reuse for consecutive chunk requests.
@@ -388,6 +448,12 @@ async def read_pdf(
     extract_tables = fixed_params.get("extract_tables", extract_tables)
     extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
     extract_images = fixed_params.get("extract_images", extract_images)
+    render_images = fixed_params.get("render_images", render_images)
+    render_dpi = fixed_params.get("render_dpi", render_dpi)
+    render_format = fixed_params.get("render_format", render_format)
+    extract_forms = fixed_params.get("extract_forms", extract_forms)
+    inspect_struct = fixed_params.get("inspect_struct", inspect_struct)
+    include_coords = fixed_params.get("include_coords", include_coords)
     images_output_dir = fixed_params.get("images_output_dir", images_output_dir)
     preview_only = fixed_params.get("preview_only", preview_only)
     preview_lines = fixed_params.get("preview_lines", preview_lines)
@@ -477,7 +543,15 @@ async def read_pdf(
             file_path,
             extract_metadata=True,
             extract_images=extract_images,
-            images_output_dir=images_output_dir
+            images_output_dir=images_output_dir,
+            # New parameters
+            render_images=render_images,
+            render_dpi=render_dpi,
+            render_format=render_format,
+            extract_tables=extract_tables,
+            extract_forms=extract_forms,
+            inspect_struct=inspect_struct,
+            include_coords=include_coords,
         )
         full_content = result.text_content
 
@@ -567,6 +641,18 @@ async def read_pdf(
                 "session_id": session_id,
                 "processing_time_ms": processing_time_ms,
             }
+
+            # Include new fields if present
+            if hasattr(result, 'rendered_pages') and result.rendered_pages:
+                result_dict["rendered_pages"] = result.rendered_pages
+            if hasattr(result, 'extracted_tables') and result.extracted_tables:
+                result_dict["extracted_tables"] = result.extracted_tables
+            if hasattr(result, 'form_fields') and result.form_fields:
+                result_dict["form_fields"] = result.form_fields
+            if hasattr(result, 'structure') and result.structure:
+                result_dict["structure"] = result.structure
+            if hasattr(result, 'text_with_coords') and result.text_with_coords:
+                result_dict["text_with_coords"] = result.text_with_coords
 
             # Check if response might be too large for token limits
             if len(sections) > 30 or (len(paginated_content) > 8000 and len(sections) > 0):
