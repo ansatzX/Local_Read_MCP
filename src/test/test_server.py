@@ -9,6 +9,7 @@ import pytest
 import os
 import tempfile
 import json
+from types import SimpleNamespace
 from pathlib import Path
 
 # Import the server module
@@ -20,6 +21,7 @@ from local_read_mcp.server import (
     create_simple_converter_wrapper,
     process_document,
 )
+from local_read_mcp.server import app as server_app
 from local_read_mcp.converters import generate_session_id
 from local_read_mcp.converters import DocumentConverterResult
 
@@ -254,48 +256,381 @@ class TestServerIntegration:
     @pytest.mark.asyncio
     async def test_get_supported_formats(self):
         """Test get_supported_formats tool."""
-        # Import the raw function, not the MCP tool wrapper
-        from local_read_mcp import server
+        result = await server_app.get_supported_formats.fn()
 
-        # Access the original function through the mcp instance
-        # Since get_supported_formats is decorated with @mcp.tool(),
-        # we need to call it directly as a function
-        async def get_formats():
-            return {
-                "success": True,
-                "documents": {
-                    "pdf": "PDF documents (.pdf)",
-                    "docx": "Word documents (.docx)",
-                    "xlsx": "Excel spreadsheets (xlsx) - converted to markdown tables",
-                    "pptx": "PowerPoint presentations (pptx)",
-                    "html": "HTML files (html, .htm)",
-                },
-                "text": {
-                    "txt": "Plain text files (txt)",
-                    "md": "Markdown files (md)",
-                    "json": "JSON files (json)",
-                    "yaml": "YAML files (yaml, .yml)",
-                    "csv": "CSV files (csv) - converted to markdown tables",
-                    "toml": "TOML files (toml)",
-                    "py": "Python files (py)",
-                    "sh": "Shell scripts (sh)",
-                },
-                "archives": {
-                    "zip": "ZIP archives (zip) - lists contents and extracts files",
-                },
-                "fallback": {
-                    "markitdown": "MarkItDown fallback - supports many additional formats",
-                },
-            }
+        assert "text_formats" in result
+        assert "binary_formats" in result
+        assert "tools" in result
+        assert "migration_guide" in result
+        assert "read_pdf" in result["tools"]["deprecated"]
+        assert "read_with_markitdown" in result["tools"]["deprecated"]
+        assert "read_pdf" in result["migration_guide"]
+        assert "read_with_markitdown" in result["migration_guide"]
 
-        result = await get_formats()
+
+class TestProcessPdfDocument:
+    """Regression tests for process_pdf_document."""
+
+    @pytest.mark.asyncio
+    async def test_process_pdf_document_text_response_has_total_chars(self, tmp_path, monkeypatch):
+        """Text response should succeed and include total character count."""
+        test_file = tmp_path / "sample.pdf"
+        test_file.write_text("fake-pdf", encoding="utf-8")
+
+        def fake_pdf_converter(path, **kwargs):
+            return DocumentConverterResult(
+                title="Sample PDF",
+                text_content="PDF content"
+            )
+
+        monkeypatch.setattr(server_app, "PdfConverter", fake_pdf_converter)
+
+        result = await server_app.process_pdf_document(
+            file_path=str(test_file),
+            chunk=1,
+            chunk_size=10000,
+            offset=None,
+            limit=None,
+            extract_sections=False,
+            extract_tables=False,
+            extract_metadata=False,
+            extract_images=False,
+            render_images=False,
+            render_dpi=200,
+            render_format="png",
+            extract_forms=False,
+            inspect_struct=False,
+            include_coords=False,
+            images_output_dir=None,
+            preview_only=False,
+            preview_lines=100,
+            session_id=None,
+            return_format="text",
+        )
 
         assert result["success"] is True
-        assert "documents" in result
-        assert "text" in result
-        assert "archives" in result
-        assert "pdf" in result["documents"]
-        assert "json" in result["text"]
+        assert result["total_chars"] == len("PDF content")
+
+
+class TestConverterWrapperCaching:
+    """Tests for converter wrapper caching optimizations."""
+
+    @pytest.mark.asyncio
+    async def test_read_text_file_reuses_simple_converter_wrapper(self, monkeypatch, tmp_path):
+        """read_text_file should reuse the same simple wrapper across calls."""
+        test_file = tmp_path / "sample.txt"
+        test_file.write_text("hello", encoding="utf-8")
+
+        wrapper_create_calls = 0
+        converter_ids = []
+
+        def fake_wrapper_factory(converter_func, converter_name=""):
+            nonlocal wrapper_create_calls
+            wrapper_create_calls += 1
+
+            def wrapper(file_path, **kwargs):
+                return DocumentConverterResult(title="x", text_content="y")
+
+            return wrapper
+
+        async def fake_process_document(file_path, converter_func, converter_kwargs, **kwargs):
+            converter_ids.append(id(converter_func))
+            return {"success": True, "text": "ok"}
+
+        if hasattr(server_app, "_SIMPLE_CONVERTER_CACHE"):
+            server_app._SIMPLE_CONVERTER_CACHE.clear()
+
+        monkeypatch.setattr(server_app, "create_simple_converter_wrapper", fake_wrapper_factory)
+        monkeypatch.setattr(server_app, "process_document", fake_process_document)
+
+        await server_app.read_text_file.fn(file_path=str(test_file), format="text")
+        await server_app.read_text_file.fn(file_path=str(test_file), format="text")
+
+        assert wrapper_create_calls == 1
+        assert len(converter_ids) == 2
+        assert converter_ids[0] == converter_ids[1]
+
+
+class TestDeprecatedToolForwarding:
+    """Tests for deprecated tool forwarding paths."""
+
+    @pytest.mark.asyncio
+    async def test_read_text_deprecated_forwards_to_read_text_file_fn(self, monkeypatch):
+        """read_text should delegate to read_text_file.fn with format=text."""
+        called = {}
+
+        async def fake_read_text_file_fn(**kwargs):
+            called.update(kwargs)
+            return {"success": True, "source": "read_text_file"}
+
+        monkeypatch.setattr(
+            server_app,
+            "read_text_file",
+            SimpleNamespace(fn=fake_read_text_file_fn),
+        )
+
+        result = await server_app.read_text.fn(file_path="/tmp/a.txt")
+
+        assert result["success"] is True
+        assert called["format"] == "text"
+        assert called["file_path"] == "/tmp/a.txt"
+
+    @pytest.mark.asyncio
+    async def test_read_pdf_deprecated_forwards_to_read_binary_file_fn(self, monkeypatch):
+        """read_pdf should delegate to read_binary_file.fn with format=pdf."""
+        called = {}
+
+        async def fake_read_binary_file_fn(**kwargs):
+            called.update(kwargs)
+            return {"success": True, "source": "read_binary_file"}
+
+        monkeypatch.setattr(
+            server_app,
+            "read_binary_file",
+            SimpleNamespace(fn=fake_read_binary_file_fn),
+        )
+
+        result = await server_app.read_pdf.fn(file_path="/tmp/a.pdf")
+
+        assert result["success"] is True
+        assert called["format"] == "pdf"
+        assert called["file_path"] == "/tmp/a.pdf"
+
+    @pytest.mark.asyncio
+    async def test_read_pdf_deprecated_forces_pdf_format(self, monkeypatch):
+        """Deprecated read_pdf should always force format=pdf."""
+        called = {}
+
+        async def fake_read_binary_file_fn(**kwargs):
+            called.update(kwargs)
+            return {"success": True}
+
+        monkeypatch.setattr(
+            server_app,
+            "read_binary_file",
+            SimpleNamespace(fn=fake_read_binary_file_fn),
+        )
+
+        await server_app.read_pdf.fn(file_path="/tmp/a.pdf", format="word", chunk=2)
+
+        assert called["format"] == "pdf"
+        assert called["chunk"] == 2
+
+    @pytest.mark.asyncio
+    async def test_read_with_markitdown_uses_forwarded_fn(self, monkeypatch):
+        """read_with_markitdown should route to read_text_file.fn for text extensions."""
+        called = {}
+
+        async def fake_read_text_file_fn(**kwargs):
+            called["tool"] = "text"
+            called.update(kwargs)
+            return {"success": True}
+
+        async def fake_read_binary_file_fn(**kwargs):
+            called["tool"] = "binary"
+            called.update(kwargs)
+            return {"success": True}
+
+        monkeypatch.setattr(
+            server_app,
+            "read_text_file",
+            SimpleNamespace(fn=fake_read_text_file_fn),
+        )
+        monkeypatch.setattr(
+            server_app,
+            "read_binary_file",
+            SimpleNamespace(fn=fake_read_binary_file_fn),
+        )
+
+        await server_app.read_with_markitdown.fn(file_path="/tmp/a.txt")
+
+        assert called["tool"] == "text"
+        assert called["file_path"] == "/tmp/a.txt"
+
+    @pytest.mark.asyncio
+    async def test_read_with_markitdown_routes_binary_extension(self, monkeypatch):
+        """read_with_markitdown should route to read_binary_file.fn for binary extensions."""
+        called = {}
+
+        async def fake_read_text_file_fn(**kwargs):
+            called["tool"] = "text"
+            called.update(kwargs)
+            return {"success": True}
+
+        async def fake_read_binary_file_fn(**kwargs):
+            called["tool"] = "binary"
+            called.update(kwargs)
+            return {"success": True}
+
+        monkeypatch.setattr(
+            server_app,
+            "read_text_file",
+            SimpleNamespace(fn=fake_read_text_file_fn),
+        )
+        monkeypatch.setattr(
+            server_app,
+            "read_binary_file",
+            SimpleNamespace(fn=fake_read_binary_file_fn),
+        )
+
+        await server_app.read_with_markitdown.fn(file_path="/tmp/a.pdf")
+
+        assert called["tool"] == "binary"
+        assert called["file_path"] == "/tmp/a.pdf"
+
+
+class TestReadBinaryFileExtractImagesDefault:
+    """Tests for extract_images default behavior in read_binary_file."""
+
+    @pytest.mark.asyncio
+    async def test_auto_enable_extract_images_when_vision_enabled(self, monkeypatch):
+        """When not specified and vision is enabled, extract_images should auto-enable."""
+        called = {}
+
+        async def fake_process_pdf_document(**kwargs):
+            called.update(kwargs)
+            return {"success": True}
+
+        monkeypatch.setattr(server_app, "process_pdf_document", fake_process_pdf_document)
+        monkeypatch.setattr(server_app, "VISION_ENABLED", True)
+
+        result = await server_app.read_binary_file.fn(file_path="/tmp/a.pdf", format="pdf")
+
+        assert result["success"] is True
+        assert called["extract_images"] is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_extract_images_false_is_respected(self, monkeypatch):
+        """Explicit extract_images=False should not be overridden."""
+        called = {}
+
+        async def fake_process_pdf_document(**kwargs):
+            called.update(kwargs)
+            return {"success": True}
+
+        monkeypatch.setattr(server_app, "process_pdf_document", fake_process_pdf_document)
+        monkeypatch.setattr(server_app, "VISION_ENABLED", True)
+
+        result = await server_app.read_binary_file.fn(
+            file_path="/tmp/a.pdf",
+            format="pdf",
+            extract_images=False,
+        )
+
+        assert result["success"] is True
+        assert called["extract_images"] is False
+
+    @pytest.mark.asyncio
+    async def test_default_extract_images_false_when_vision_disabled(self, monkeypatch):
+        """When vision is disabled and not specified, extract_images should be False."""
+        called = {}
+
+        async def fake_process_pdf_document(**kwargs):
+            called.update(kwargs)
+            return {"success": True}
+
+        monkeypatch.setattr(server_app, "process_pdf_document", fake_process_pdf_document)
+        monkeypatch.setattr(server_app, "VISION_ENABLED", False)
+
+        result = await server_app.read_binary_file.fn(file_path="/tmp/a.pdf", format="pdf")
+
+        assert result["success"] is True
+        assert called["extract_images"] is False
+
+
+class TestParameterExtractionHelpers:
+    """Tests for parameter extraction helper functions."""
+
+    def test_extract_common_read_params_basic(self):
+        """Helper should extract basic common read parameters."""
+        params = {
+            "file_path": "/tmp/a.txt",
+            "format": "text",
+            "chunk": 2,
+            "chunk_size": 5000,
+            "offset": None,
+            "limit": None,
+            "extract_sections": True,
+            "extract_tables": False,
+            "extract_metadata": True,
+            "preview_only": False,
+            "preview_lines": 50,
+            "session_id": "s1",
+            "return_format": "json",
+        }
+
+        common_params, fixed_params = server_app._extract_common_read_params("read_text_file", params)
+
+        assert common_params["file_path"] == "/tmp/a.txt"
+        assert common_params["format"] == "text"
+        assert common_params["chunk"] == 2
+        assert common_params["chunk_size"] == 5000
+        assert common_params["extract_sections"] is True
+        assert common_params["extract_metadata"] is True
+        assert common_params["return_format"] == "json"
+        assert fixed_params["file_path"] == "/tmp/a.txt"
+
+    def test_extract_common_read_params_applies_aliases(self):
+        """Helper should apply fix_tool_arguments aliases before extraction."""
+        params = {
+            "filepath": "/tmp/a.txt",
+            "page": 3,
+            "page_size": 2000,
+            "preview": True,
+            "metadata": True,
+            "sections": True,
+            "tables": True,
+            "return_format": "text",
+            "format": "text",
+            "offset": None,
+            "limit": None,
+            "preview_lines": 10,
+            "session_id": None,
+        }
+
+        common_params, _ = server_app._extract_common_read_params("read_text_file", params)
+
+        assert common_params["file_path"] == "/tmp/a.txt"
+        assert common_params["chunk"] == 3
+        assert common_params["chunk_size"] == 2000
+        assert common_params["preview_only"] is True
+        assert common_params["extract_metadata"] is True
+        assert common_params["extract_sections"] is True
+        assert common_params["extract_tables"] is True
+
+
+class TestFormatExtensionHelpers:
+    """Tests for format/extension helper functions."""
+
+    def test_is_text_like_extension(self):
+        """Text-like extension helper should classify known extensions correctly."""
+        assert server_app._is_text_like_extension(".txt") is True
+        assert server_app._is_text_like_extension(".json") is True
+        assert server_app._is_text_like_extension(".pdf") is False
+        assert server_app._is_text_like_extension(".unknown") is False
+
+
+class TestSupportedFormatsBuilder:
+    """Tests for supported format data builder helpers."""
+
+    def test_build_supported_format_groups(self):
+        """Builder should generate text/binary groups from extension mapping."""
+        text_formats, binary_formats = server_app._build_supported_format_groups()
+
+        assert text_formats[0]["name"] == "Plain Text"
+        assert text_formats[0]["extensions"] == [".txt", ".md", ".py", ".sh", ".log", ".rst"]
+        assert any(item["name"] == "PDF" and item["extensions"] == [".pdf"] for item in binary_formats)
+        assert any(item["name"] == "Word" and item["extensions"] == [".docx", ".doc"] for item in binary_formats)
+
+    def test_build_migration_guide_and_deprecated_tools(self):
+        """Builder should generate deprecated tool list and migration guide consistently."""
+        deprecated_tools, migration_guide = server_app._build_deprecated_migration_data()
+
+        assert deprecated_tools[:3] == ["read_pdf", "read_word", "read_excel"]
+        assert deprecated_tools[-1] == "read_with_markitdown"
+        assert migration_guide["read_pdf"] == "read_binary_file or read_binary_file(format='pdf')"
+        assert migration_guide["read_text"] == "read_text_file or read_text_file(format='text')"
+        assert migration_guide["read_with_markitdown"] == "read_text_file or read_binary_file (auto-detects)"
 
 
 if __name__ == "__main__":
