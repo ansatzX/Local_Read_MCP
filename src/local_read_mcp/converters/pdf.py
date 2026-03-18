@@ -9,7 +9,28 @@ from .base import (
     pdfminer,
     fitz
 )
+from .pdf_inspector import inspect_pdf
+from .pdf_rendering import render_pdf_to_images
+from .pdf_forms import extract_form_fields
+from .pdf_tables import extract_tables
 from .utils import extract_sections_from_markdown, fix_latex_formulas, apply_content_limit
+
+
+def extract_text_pymupdf(pdf_path: str) -> str:
+    """Extract text using PyMuPDF (better accuracy)."""
+    if fitz is None:
+        return None
+    try:
+        doc = fitz.open(pdf_path)
+        text = ""
+        for page in doc:
+            text += page.get_text() + "\n"
+        doc.close()
+        return text
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.debug(f"PyMuPDF text extraction failed: {e}")
+        return None
 
 
 def extract_pdf_images(
@@ -137,13 +158,62 @@ def extract_pdf_images(
     return images_info
 
 
+def extract_text_with_coordinates(pdf_path: str) -> List[Dict[str, Any]]:
+    """Extract text with bounding box coordinates."""
+    if fitz is None:
+        return []
+    results = []
+    try:
+        doc = fitz.open(pdf_path)
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            # Get text with more details
+            words = page.get_text("words")  # (x0, y0, x1, y1, text, block_no, line_no, word_no)
+            for word in words:
+                result = {
+                    "text": word[4],
+                    "page": page_num,
+                    "rect": [word[0], word[1], word[2], word[3]],
+                }
+                # Try to get font info (more complex)
+                try:
+                    # Get spans for font info
+                    blocks = page.get_text("dict")["blocks"]
+                    for block in blocks:
+                        if "lines" in block:
+                            for line in block["lines"]:
+                                for span in line["spans"]:
+                                    # This is a simplification - full matching would be better
+                                    if word[4] in span["text"]:
+                                        result["font"] = span.get("font", None)
+                                        result["size"] = span.get("size", None)
+                                        break
+                except Exception:
+                    pass
+                results.append(result)
+        doc.close()
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Coordinate extraction failed: {e}")
+    return results
+
+
 def PdfConverter(
     local_path: str,
     extract_metadata: bool = False,
     extract_sections: bool = False,
     extract_images: bool = False,
     images_output_dir: Optional[str] = None,
-    fix_latex: bool = True
+    fix_latex: bool = True,
+    # New parameters
+    render_images: bool = False,
+    render_dpi: int = 200,
+    render_format: str = "png",
+    extract_tables: bool = False,  # Consistent naming
+    extract_forms: bool = False,
+    inspect_struct: bool = False,
+    include_coords: bool = False,
+    page_range: Optional[tuple] = None,  # New: page range for rendering/tables
 ) -> DocumentConverterResult:
     """
     Convert a PDF file to text format with enhanced features.
@@ -155,22 +225,31 @@ def PdfConverter(
         extract_images: Whether to extract images from PDF (requires PyMuPDF)
         images_output_dir: Directory to save extracted images (default: temp directory)
         fix_latex: Whether to fix LaTeX formula parsing issues
+        render_images: Whether to render PDF pages to images (requires PyMuPDF)
+        render_dpi: DPI for rendered images (default: 200)
+        render_format: Format for rendered images (default: "png")
+        extract_tables: Whether to extract tables from PDF
+        extract_forms: Whether to extract form fields from PDF (requires PyMuPDF)
+        inspect_struct: Whether to inspect PDF structure (requires PyMuPDF)
+        include_coords: Whether to extract text with coordinates (requires PyMuPDF)
+        page_range: Tuple of (start_page, end_page) for rendering/tables (0-indexed)
 
     Returns:
         DocumentConverterResult containing extracted text and optional metadata/sections/images.
     """
     logger = logging.getLogger(__name__)
 
-    if pdfminer is None:
-        return DocumentConverterResult(
-            title=None,
-            text_content="[Error: pdfminer-six not installed]",
-            error="pdfminer-six not installed"
-        )
-
     try:
-        # Extract text content
-        text_content = pdfminer.high_level.extract_text(local_path)
+        # Try PyMuPDF first, fall back to pdfminer
+        text_content = extract_text_pymupdf(local_path)
+        if text_content is None:
+            if pdfminer is None:
+                return DocumentConverterResult(
+                    title=None,
+                    text_content="[Error: pdfminer-six not installed]",
+                    error="pdfminer-six not installed"
+                )
+            text_content = pdfminer.high_level.extract_text(local_path)
 
         # Get PDF page count
         pdf_page_count = None
@@ -197,6 +276,12 @@ def PdfConverter(
         metadata = {}
         sections = []
         images = []
+        # New features
+        rendered_pages = []
+        extracted_tables_list = []
+        form_fields = []
+        structure = {}
+        text_with_coords = []
 
         if extract_metadata:
             file_size = None
@@ -238,6 +323,44 @@ def PdfConverter(
                     logger.error(f"Failed to extract images: {e}")
                     metadata["image_extraction_error"] = str(e)
 
+        # New features
+        if render_images and fitz is not None:
+            try:
+                rendered_pages = render_pdf_to_images(
+                    local_path,
+                    dpi=render_dpi,
+                    format=render_format,
+                    page_range=page_range
+                )
+            except Exception as e:
+                logger.error(f"Failed to render images: {e}")
+
+        if extract_tables:
+            try:
+                extracted_tables_list = extract_tables(local_path, page_range=page_range)
+            except Exception as e:
+                logger.error(f"Failed to extract tables: {e}")
+
+        if extract_forms and fitz is not None:
+            try:
+                form_result = extract_form_fields(local_path)
+                if "error" not in form_result:
+                    form_fields = form_result.get("fields", [])
+            except Exception as e:
+                logger.error(f"Failed to extract forms: {e}")
+
+        if inspect_struct and fitz is not None:
+            try:
+                structure = inspect_pdf(local_path)
+            except Exception as e:
+                logger.error(f"Failed to inspect structure: {e}")
+
+        if include_coords and fitz is not None:
+            try:
+                text_with_coords = extract_text_with_coordinates(local_path)
+            except Exception as e:
+                logger.error(f"Failed to extract text with coords: {e}")
+
         # Try to extract title from first line or metadata
         title = None
         if text_content:
@@ -250,9 +373,15 @@ def PdfConverter(
             text_content=text_content,
             metadata=metadata,
             sections=sections,
-            tables=[],  # PDF tables not extracted in basic version
-            images=images,  # Extracted images
-            processing_time_ms=None  # Can be calculated by caller
+            tables=[],  # Keep for backward compatibility (empty)
+            images=images,
+            processing_time_ms=None,
+            # New fields
+            rendered_pages=rendered_pages,
+            extracted_tables=extracted_tables_list,
+            form_fields=form_fields,
+            structure=structure,
+            text_with_coords=text_with_coords,
         )
 
     except Exception as e:

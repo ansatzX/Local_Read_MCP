@@ -28,6 +28,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.optional-dependencies]
+pdf = [
+    "pdfplumber>=0.10.0",
+    "pillow>=10.0.0",
+]
 dev = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",

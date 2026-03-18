@@ -36,6 +36,10 @@ from local_read_mcp.converters import (
     fix_latex_formulas,
     generate_session_id,
     PaginationManager,
+    inspect_pdf,
+    render_pdf_to_images,
+    extract_form_fields,
+    extract_tables,
 )
 
 
@@ -414,6 +418,80 @@ class TestPaginationManager:
         
         assert len(slice_content) == 4000
         assert has_more is False
+
+
+class TestPdfEnhancements:
+    """Tests for PDF enhancement features."""
+
+    def test_pdf_inspector_missing_file(self):
+        """Test PDF inspector with missing file."""
+        result = inspect_pdf("/non/existent/file.pdf")
+        assert "error" in result
+
+    def test_render_pdf_missing_file(self):
+        """Test PDF rendering with missing file."""
+        result = render_pdf_to_images("/non/existent/file.pdf")
+        assert len(result) == 1
+        assert "error" in result[0]
+
+    def test_extract_forms_missing_file(self):
+        """Test form extraction with missing file."""
+        result = extract_form_fields("/non/existent/file.pdf")
+        assert "error" in result
+
+    def test_extract_tables_missing_file(self):
+        """Test table extraction with missing file."""
+        result = extract_tables("/non/existent/file.pdf")
+        assert len(result) == 1
+        assert "error" in result[0]
+
+    def test_document_converter_result_new_fields(self):
+        """Test that DocumentConverterResult has new fields."""
+        result = DocumentConverterResult(
+            title="Test",
+            text_content="Content",
+            rendered_pages=[{"page": 1, "path": "/tmp/page1.png"}],
+            extracted_tables=[{"page": 1, "headers": ["A", "B"]}],
+            form_fields=[{"name": "field1", "type": "text"}],
+            structure={"metadata": {"title": "Test"}},
+            text_with_coords=[{"text": "Hello", "page": 0}],
+        )
+
+        assert hasattr(result, 'rendered_pages')
+        assert hasattr(result, 'extracted_tables')
+        assert hasattr(result, 'form_fields')
+        assert hasattr(result, 'structure')
+        assert hasattr(result, 'text_with_coords')
+
+        d = result.to_dict()
+        assert "rendered_pages" in d
+        assert "extracted_tables" in d
+        assert "form_fields" in d
+        assert "structure" in d
+        assert "text_with_coords" in d
+
+    def test_document_converter_result_backward_compatibility(self):
+        """Test backward compatibility of DocumentConverterResult."""
+        # Create with old parameters only
+        result = DocumentConverterResult(
+            title="Test",
+            text_content="Content",
+            metadata={"key": "value"},
+            sections=[],
+            tables=[],
+            images=[],
+        )
+
+        d = result.to_dict()
+        # Old fields should still exist
+        assert "title" in d
+        assert "text_content" in d
+        assert "metadata" in d
+        assert "sections" in d
+        assert "tables" in d
+        # New fields should NOT be in dict if empty
+        assert "rendered_pages" not in d
+        assert "extracted_tables" not in d
 
 
 if __name__ == "__main__":

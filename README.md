@@ -6,6 +6,7 @@ Model Context Protocol server for local document processing with vision support.
 
 - **Local Processing**: No cloud services required for document conversion
 - **Multi-format Support**: PDF, Word, Excel, PowerPoint, HTML, Text, JSON, CSV, YAML, ZIP
+- **Enhanced PDF Features**: Rendering, table extraction, form handling, metadata inspection, coordinate-aware text extraction
 - **Markdown Output**: All formats convert to readable markdown
 - **MCP Integration**: Seamless with Claude Code and other MCP clients
 - **Vision Analysis**: Analyze images using OpenAI-compatible APIs (Doubao, GPT-4o, etc.)
@@ -20,8 +21,11 @@ cd Local_Read_MCP
 uv venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Install dependencies (includes vision support)
+# Install basic dependencies
 uv pip install -e .
+
+# OR install with enhanced PDF features (includes pdfplumber for table extraction)
+uv pip install -e ".[pdf]"
 ```
 
 ## Configuration
@@ -75,7 +79,7 @@ Restart Claude Code to load the server.
 
 | Tool                    | Description                       | Formats                     |
 | ------------------------ | --------------------------------- | ---------------------------- |
-| `read_pdf`             | PDF to markdown                  | .pdf                        |
+| `read_pdf`             | PDF to markdown (enhanced)       | .pdf                        |
 | `read_word`            | Word to markdown                 | .docx, .doc                |
 | `read_excel`           | Excel to markdown tables           | .xlsx, .xls                |
 | `read_powerpoint`       | PowerPoint to markdown            | .pptx, .ppt                |
@@ -105,6 +109,17 @@ Restart Claude Code to load the server.
 | `extract_images`  | bool  | False    | Extract images (PDF only)              |
 | `preview_only`     | bool  | False    | Return preview (first N lines)          |
 | `return_format`    | str   | "text"   | Output: "text" or "json"            |
+
+### PDF Enhanced Parameters (read_pdf only)
+
+| Parameter          | Type  | Default | Description                          |
+| ----------------- | ----- | ------- | ------------------------------------ |
+| `render_images`    | bool  | False    | Render PDF pages to images           |
+| `render_dpi`       | int   | 200      | DPI for rendered images              |
+| `render_format`    | str   | "png"    | Image format (png/jpeg)              |
+| `extract_forms`    | bool  | False    | Extract form fields with types/values/positions |
+| `inspect_struct`   | bool  | False    | Get complete PDF structure/metadata/outline/fonts |
+| `include_coords`   | bool  | False    | Include bounding box coordinates with text |
 
 ### Vision Tools
 
@@ -150,6 +165,33 @@ read_pdf("/path/to/large.pdf", chunk=1, chunk_size=10000)
 
 # Extract images
 read_pdf("/path/to/document.pdf", extract_images=True)
+
+# Render pages to images (for visual inspection)
+read_pdf("/path/to/document.pdf", render_images=True, render_dpi=200)
+
+# Extract tables (requires pdfplumber - install with ".[pdf]")
+read_pdf("/path/to/document.pdf", extract_tables=True, return_format="json")
+
+# Extract form fields
+read_pdf("/path/to/form.pdf", extract_forms=True, return_format="json")
+
+# Get complete PDF structure (metadata, outline, fonts, etc.)
+read_pdf("/path/to/document.pdf", inspect_struct=True, return_format="json")
+
+# Get text with coordinates
+read_pdf("/path/to/document.pdf", include_coords=True, return_format="json")
+
+# All features combined
+read_pdf(
+    "/path/to/document.pdf",
+    extract_images=True,
+    render_images=True,
+    extract_tables=True,
+    extract_forms=True,
+    inspect_struct=True,
+    include_coords=True,
+    return_format="json"
+)
 ```
 
 ### Vision Analysis
@@ -181,6 +223,11 @@ cleanup_temp_files(cleanup_zip_extracts=False)
 # Clean up a custom directory in addition to temp dirs
 cleanup_temp_files(custom_directory="/path/to/your/dir")
 ```
+
+**Note:** Temporary files are created when using:
+- `read_pdf(extract_images=True)` - PDF image extraction
+- `read_pdf(render_images=True)` - PDF page rendering
+- `read_zip` - ZIP extraction
 
 ## Development
 
@@ -221,7 +268,7 @@ MIT License
 
 ### 临时文件清理
 
-- **重要**: 使用 `read_pdf(extract_images=True)` 或 `read_zip` 后会产生临时文件
+- **重要**: 使用 `read_pdf(extract_images=True)`、`read_pdf(render_images=True)` 或 `read_zip` 后会产生临时文件
 - **任务结束后**: 确认用户不再需要这些文件时，使用 `cleanup_temp_files` 工具清理
 - 默认清理24小时前的文件，可使用 `older_than_hours=0` 立即清理所有
 
@@ -255,7 +302,7 @@ When reading document files, **strictly follow these rules**:
 
 ### Temporary Files Cleanup
 
-- **IMPORTANT**: Using `read_pdf(extract_images=True)` or `read_zip` creates temporary files
+- **IMPORTANT**: Using `read_pdf(extract_images=True)`, `read_pdf(render_images=True)`, or `read_zip` creates temporary files
 - **After task completion**: When user confirms no further need for these files, use `cleanup_temp_files` tool to clean up
 - Default cleans files older than 24 hours, use `older_than_hours=0` to clean all immediately
 

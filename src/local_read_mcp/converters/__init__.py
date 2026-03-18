@@ -24,6 +24,10 @@ from .docx import DocxConverter
 from .xlsx import XlsxConverter
 from .pptx import PptxConverter
 from .pdf import PdfConverter, extract_pdf_images
+from .pdf_inspector import inspect_pdf, get_pdf_metadata
+from .pdf_rendering import render_pdf_to_images
+from .pdf_forms import extract_form_fields
+from .pdf_tables import extract_tables
 from .simple import TextConverter, JsonConverter, YamlConverter, CsvConverter, MarkItDownConverter
 from .zip import ZipConverter
 
@@ -51,6 +55,11 @@ __all__ = [
     "PptxConverter",
     "PdfConverter",
     "extract_pdf_images",
+    "inspect_pdf",
+    "get_pdf_metadata",
+    "render_pdf_to_images",
+    "extract_form_fields",
+    "extract_tables",
     "TextConverter",
     "JsonConverter",
     "YamlConverter",
