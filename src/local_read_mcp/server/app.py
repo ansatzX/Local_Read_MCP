@@ -595,6 +595,273 @@ async def process_document(
 
 
 @mcp.tool()
+async def read_text_file(
+    file_path: str,
+    format: Optional[str] = None,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text"
+) -> Dict[str, Any]:
+    """Read text-based files.
+
+    Supported formats: .txt, .md, .py, .sh, .json, .csv, .yaml, .yml
+
+    Args:
+        file_path: Path to the file to read
+        format: Explicit format override (text/json/csv/yaml)
+        chunk: Chunk number for content pagination (1-indexed). Default: 1.
+        chunk_size: Number of characters per chunk. Default: 10000.
+        offset: Character offset (alternative to chunk). If specified, overrides chunk.
+        limit: Character limit (alternative to chunk_size). If specified, overrides chunk_size.
+        extract_sections: Extract document sections/headings. Use for structured documents. Default: False.
+        extract_tables: Extract table information (CSV only). Default: False.
+        extract_metadata: Extract file metadata. Use with return_format="json". Default: False.
+        preview_only: Return only first N lines without full conversion. Use for quick assessment. Default: False.
+        preview_lines: Number of lines for preview mode. Default: 100.
+        session_id: Session ID for resuming pagination. Reuse for consecutive chunk requests.
+        return_format: Output format: 'json' (structured with metadata/sections) or 'text' (plain). Default: 'text'.
+
+    Returns:
+        A dictionary containing the text content or error message.
+        If return_format='json', returns enhanced structure with metadata, sections, pagination_info, session_id.
+    """
+    # Apply parameter auto-fix for common naming mistakes
+    local_vars = locals().copy()
+    fixed_params = fix_tool_arguments("read_text_file", local_vars)
+
+    # Extract fixed parameters
+    file_path = fixed_params.get("file_path", file_path)
+    format = fixed_params.get("format", format)
+    chunk = fixed_params.get("chunk", chunk)
+    chunk_size = fixed_params.get("chunk_size", chunk_size)
+    offset = fixed_params.get("offset", offset)
+    limit = fixed_params.get("limit", limit)
+    extract_sections = fixed_params.get("extract_sections", extract_sections)
+    extract_tables = fixed_params.get("extract_tables", extract_tables)
+    extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
+    preview_only = fixed_params.get("preview_only", preview_only)
+    preview_lines = fixed_params.get("preview_lines", preview_lines)
+    session_id = fixed_params.get("session_id", session_id)
+    return_format = fixed_params.get("return_format", return_format)
+
+    # Auto-detect format if not provided
+    if not format:
+        format = detect_format(file_path)
+
+    # Map format to converter
+    converter_func = None
+    converter_kwargs = {
+        "extract_metadata": extract_metadata,
+        "extract_sections": extract_sections,
+        "extract_tables": extract_tables,
+    }
+
+    if format == "text":
+        converter_func = create_simple_converter_wrapper(TextConverter, "text")
+    elif format == "json":
+        converter_func = create_simple_converter_wrapper(JsonConverter, "json")
+    elif format == "csv":
+        converter_func = create_simple_converter_wrapper(CsvConverter, "csv")
+    elif format == "yaml":
+        converter_func = create_simple_converter_wrapper(YamlConverter, "yaml")
+    else:
+        # Unknown format - use markitdown fallback
+        converter_func = create_simple_converter_wrapper(MarkItDownConverter, "markitdown")
+
+    return await process_document(
+        file_path=file_path,
+        converter_func=converter_func,
+        converter_kwargs=converter_kwargs,
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format
+    )
+
+
+@mcp.tool()
+async def read_binary_file(
+    file_path: str,
+    format: Optional[str] = None,
+    # Standard pagination
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    # Standard structured extraction
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text",
+    # PDF-specific features (only used when format=pdf or auto-detected as pdf)
+    extract_images: Optional[bool] = False,
+    render_images: Optional[bool] = False,
+    render_dpi: Optional[int] = 200,
+    render_format: Optional[str] = "png",
+    extract_forms: Optional[bool] = False,
+    inspect_struct: Optional[bool] = False,
+    include_coords: Optional[bool] = False,
+    images_output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read binary/document files.
+
+    Supported formats: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .html, .htm, .zip
+
+    PDF-specific features (only available for PDF files):
+    - render_images: Render pages to images
+    - extract_forms: Extract form fields
+    - inspect_struct: Get complete PDF structure
+    - include_coords: Include text coordinates
+
+    Note: PDF-specific parameters are ignored for non-PDF files.
+
+    Args:
+        file_path: Path to the file to read
+        format: Explicit format override (pdf/word/excel/ppt/html/zip)
+        chunk: Chunk number for content pagination (1-indexed). Default: 1.
+        chunk_size: Number of characters per chunk. Default: 10000.
+        offset: Character offset (alternative to chunk). If specified, overrides chunk.
+        limit: Character limit (alternative to chunk_size). If specified, overrides chunk_size.
+        extract_sections: Extract document sections/headings. Use for structured documents. Default: False.
+        extract_tables: Extract table information. Default: False.
+        extract_metadata: Extract file metadata (size, path, timestamp, PDF pages). Use with return_format="json". Default: False.
+        preview_only: Return only first N lines without full conversion. Use for quick assessment. Default: False.
+        preview_lines: Number of lines for preview mode. Default: 100.
+        session_id: Session ID for resuming pagination. Reuse for consecutive chunk requests.
+        return_format: Output format: 'json' (structured with metadata/sections) or 'text' (plain). Default: 'text'.
+        extract_images: Extract images from PDF. Saves images to output directory and returns image info. Default: False.
+        render_images: Render PDF pages to images. Default: False.
+        render_dpi: DPI for rendered images. Default: 200.
+        render_format: Format for rendered images (png or jpeg). Default: png.
+        extract_forms: Extract form fields from PDF. Default: False.
+        inspect_struct: Get complete PDF structure (metadata, outline, fonts, etc.). Default: False.
+        include_coords: Include text with bounding box coordinates. Default: False.
+        images_output_dir: Directory to save extracted/rendered images. If None, uses temporary directory. Default: None.
+
+    Returns:
+        A dictionary containing the text content or error message.
+        If return_format='json', returns enhanced structure with metadata, sections, pagination_info, pdf_pages, images, session_id.
+    """
+    # Auto-enable extract_images if vision is configured and not explicitly set
+    if extract_images is None and VISION_ENABLED:
+        extract_images = True
+        logger.info("Vision enabled: auto-enabling extract_images=True for PDF")
+
+    # Apply parameter auto-fix for common naming mistakes
+    local_vars = locals().copy()
+    fixed_params = fix_tool_arguments("read_binary_file", local_vars)
+
+    # Extract fixed parameters
+    file_path = fixed_params.get("file_path", file_path)
+    format = fixed_params.get("format", format)
+    chunk = fixed_params.get("chunk", chunk)
+    chunk_size = fixed_params.get("chunk_size", chunk_size)
+    offset = fixed_params.get("offset", offset)
+    limit = fixed_params.get("limit", limit)
+    extract_sections = fixed_params.get("extract_sections", extract_sections)
+    extract_tables = fixed_params.get("extract_tables", extract_tables)
+    extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
+    extract_images = fixed_params.get("extract_images", extract_images)
+    render_images = fixed_params.get("render_images", render_images)
+    render_dpi = fixed_params.get("render_dpi", render_dpi)
+    render_format = fixed_params.get("render_format", render_format)
+    extract_forms = fixed_params.get("extract_forms", extract_forms)
+    inspect_struct = fixed_params.get("inspect_struct", inspect_struct)
+    include_coords = fixed_params.get("include_coords", include_coords)
+    images_output_dir = fixed_params.get("images_output_dir", images_output_dir)
+    preview_only = fixed_params.get("preview_only", preview_only)
+    preview_lines = fixed_params.get("preview_lines", preview_lines)
+    session_id = fixed_params.get("session_id", session_id)
+    return_format = fixed_params.get("return_format", return_format)
+
+    # Auto-detect format if not provided
+    if not format:
+        format = detect_format(file_path)
+
+    # Special case: PDF has its own implementation
+    if format == "pdf":
+        return await process_pdf_document(
+            file_path=file_path,
+            chunk=chunk,
+            chunk_size=chunk_size,
+            offset=offset,
+            limit=limit,
+            extract_sections=extract_sections,
+            extract_tables=extract_tables,
+            extract_metadata=extract_metadata,
+            extract_images=extract_images,
+            render_images=render_images,
+            render_dpi=render_dpi,
+            render_format=render_format,
+            extract_forms=extract_forms,
+            inspect_struct=inspect_struct,
+            include_coords=include_coords,
+            images_output_dir=images_output_dir,
+            preview_only=preview_only,
+            preview_lines=preview_lines,
+            session_id=session_id,
+            return_format=return_format,
+        )
+
+    # All other formats use process_document
+    converter_func = None
+    converter_kwargs = {
+        "extract_metadata": extract_metadata,
+        "extract_sections": extract_sections,
+        "extract_tables": extract_tables,
+    }
+
+    if format == "word":
+        converter_func = DocxConverter
+    elif format == "excel":
+        converter_func = XlsxConverter
+    elif format == "ppt":
+        converter_func = create_simple_converter_wrapper(PptxConverter, "pptx")
+    elif format == "html":
+        converter_func = HtmlConverter
+    elif format == "zip":
+        converter_func = create_simple_converter_wrapper(ZipConverter, "zip")
+    else:
+        # Unknown format - use markitdown fallback
+        converter_func = create_simple_converter_wrapper(MarkItDownConverter, "markitdown")
+
+    return await process_document(
+        file_path=file_path,
+        converter_func=converter_func,
+        converter_kwargs=converter_kwargs,
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format
+    )
+
+
+@mcp.tool()
 async def read_pdf(
     file_path: str,
     chunk: Optional[int] = 1,
