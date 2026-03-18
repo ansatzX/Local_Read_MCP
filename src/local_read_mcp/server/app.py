@@ -12,9 +12,7 @@ import sys
 import logging
 import os
 import time
-import hashlib
 import json
-import re
 import base64
 from typing import Dict, Any, Optional, List
 from fastmcp import FastMCP
@@ -130,46 +128,6 @@ async def process_pdf_document(
     """
     start_time = time.time()
 
-    # Helper functions
-    def apply_pagination(content: str, off: int, lim: Optional[int]) -> tuple[str, bool]:
-        """Apply pagination to content."""
-        if off >= len(content):
-            return "", False
-        if lim:
-            end = min(off + lim, len(content))
-            return content[off:end], end < len(content)
-        return content[off:], False
-
-    def fix_latex_formulas(content: str) -> str:
-        """Fix common LaTeX formula parsing issues."""
-        if not content:
-            return content
-
-        # Fix (cid:XXX) placeholders
-        cid_map = {
-            r'\(cid:16\)': '〈',
-            r'\(cid:17\)': '〉',
-            r'\(cid:40\)': '(',
-            r'\(cid:41\)': ')',
-            r'\(cid:91\)': '[',
-            r'\(cid:93\)': ']',
-        }
-        for pattern, replacement in cid_map.items():
-            content = re.sub(pattern, replacement, content)
-
-        # Fix Greek letters
-        greek_map = {
-            r'\\alpha': 'α',
-            r'\\beta': 'β',
-            r'\\gamma': 'γ',
-            r'\\delta': 'δ',
-            r'\\epsilon': 'ε',
-        }
-        for latex_cmd, unicode_char in greek_map.items():
-            content = re.sub(re.escape(latex_cmd), unicode_char, content)
-
-        return content
-
     try:
         # Get full content from converter (always extract metadata to get PDF page count)
         result = PdfConverter(
@@ -190,9 +148,6 @@ async def process_pdf_document(
         # Get PDF page count from metadata
         pdf_page_count = result.metadata.get("pdf_page_count") if result.metadata else None
 
-        # Apply LaTeX fixes
-        fixed_content = fix_latex_formulas(full_content)
-
         # Calculate pagination parameters
         if offset is not None:
             char_offset = offset
@@ -206,7 +161,7 @@ async def process_pdf_document(
             char_limit = chunk_size
 
         # Apply pagination
-        paginated_content, has_more = apply_pagination(fixed_content, char_offset, char_limit)
+        paginated_content, has_more = apply_pagination(full_content, char_offset, char_limit)
 
         # Apply preview if requested (does not affect has_more flag)
         if preview_only:
@@ -246,8 +201,7 @@ async def process_pdf_document(
 
         # Generate session ID if not provided
         if not session_id:
-            file_hash = hashlib.md5(file_path.encode()).hexdigest()[:8]
-            session_id = f"pdf_session_{file_hash}_{int(time.time())}"
+            session_id = generate_session_id(file_path, prefix="pdf")
 
         # Prepare result based on return format
         if return_format.lower() == "json":
@@ -262,12 +216,12 @@ async def process_pdf_document(
                 "images": images if extract_images else [],
                 "pagination_info": {
                     "current_chunk": chunk if offset is None else None,
-                    "total_chunks": max(1, (len(fixed_content) + char_limit - 1) // char_limit) if char_limit else 1,
+                    "total_chunks": max(1, (len(full_content) + char_limit - 1) // char_limit) if char_limit else 1,
                     "chunk_size": char_limit,
                     "has_more": has_more,
                     "char_offset": char_offset,
                     "char_limit": char_limit,
-                    "total_chars": len(fixed_content),
+                    "total_chars": len(full_content),
                 },
                 "pdf_pages": pdf_page_count,  # Actual PDF page count (separate from chunk pagination)
                 "session_id": session_id,
@@ -306,7 +260,7 @@ async def process_pdf_document(
 
             # Add pagination hint if there's more content
             if has_more:
-                total_chars = len(fixed_content)
+                total_chars = len(full_content)
                 current_end = char_offset + len(paginated_content)
                 total_chunks = max(1, (total_chars + char_limit - 1) // char_limit)
                 pdf_info = f" | PDF: {pdf_page_count} pages" if pdf_page_count else ""
