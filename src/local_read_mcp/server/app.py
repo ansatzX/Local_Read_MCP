@@ -102,6 +102,247 @@ def detect_format(file_path: str) -> Optional[str]:
     return None
 
 
+async def process_pdf_document(
+    file_path: str,
+    chunk: Optional[int],
+    chunk_size: Optional[int],
+    offset: Optional[int],
+    limit: Optional[int],
+    extract_sections: Optional[bool],
+    extract_tables: Optional[bool],
+    extract_metadata: Optional[bool],
+    extract_images: Optional[bool],
+    render_images: Optional[bool],
+    render_dpi: Optional[int],
+    render_format: Optional[str],
+    extract_forms: Optional[bool],
+    inspect_struct: Optional[bool],
+    include_coords: Optional[bool],
+    images_output_dir: Optional[str],
+    preview_only: Optional[bool],
+    preview_lines: Optional[int],
+    session_id: Optional[str],
+    return_format: Optional[str],
+) -> Dict[str, Any]:
+    """Process PDF document with enhanced features.
+
+    This is the standalone PDF processing logic extracted from the old read_pdf tool.
+    """
+    start_time = time.time()
+
+    # Helper functions
+    def apply_pagination(content: str, off: int, lim: Optional[int]) -> tuple[str, bool]:
+        """Apply pagination to content."""
+        if off >= len(content):
+            return "", False
+        if lim:
+            end = min(off + lim, len(content))
+            return content[off:end], end < len(content)
+        return content[off:], False
+
+    def fix_latex_formulas(content: str) -> str:
+        """Fix common LaTeX formula parsing issues."""
+        if not content:
+            return content
+
+        # Fix (cid:XXX) placeholders
+        cid_map = {
+            r'\(cid:16\)': '〈',
+            r'\(cid:17\)': '〉',
+            r'\(cid:40\)': '(',
+            r'\(cid:41\)': ')',
+            r'\(cid:91\)': '[',
+            r'\(cid:93\)': ']',
+        }
+        for pattern, replacement in cid_map.items():
+            content = re.sub(pattern, replacement, content)
+
+        # Fix Greek letters
+        greek_map = {
+            r'\\alpha': 'α',
+            r'\\beta': 'β',
+            r'\\gamma': 'γ',
+            r'\\delta': 'δ',
+            r'\\epsilon': 'ε',
+        }
+        for latex_cmd, unicode_char in greek_map.items():
+            content = re.sub(re.escape(latex_cmd), unicode_char, content)
+
+        return content
+
+    try:
+        # Get full content from converter (always extract metadata to get PDF page count)
+        result = PdfConverter(
+            file_path,
+            extract_metadata=True,
+            extract_images=extract_images,
+            images_output_dir=images_output_dir,
+            render_images=render_images,
+            render_dpi=render_dpi,
+            render_format=render_format,
+            extract_tables=extract_tables,
+            extract_forms=extract_forms,
+            inspect_struct=inspect_struct,
+            include_coords=include_coords,
+        )
+        full_content = result.text_content
+
+        # Get PDF page count from metadata
+        pdf_page_count = result.metadata.get("pdf_page_count") if result.metadata else None
+
+        # Apply LaTeX fixes
+        fixed_content = fix_latex_formulas(full_content)
+
+        # Calculate pagination parameters
+        if offset is not None:
+            char_offset = offset
+            char_limit = limit
+        else:
+            if chunk is None or chunk < 1:
+                chunk = 1
+            if chunk_size is None or chunk_size < 1:
+                chunk_size = 10000
+            char_offset = (chunk - 1) * chunk_size
+            char_limit = chunk_size
+
+        # Apply pagination
+        paginated_content, has_more = apply_pagination(fixed_content, char_offset, char_limit)
+
+        # Apply preview if requested (does not affect has_more flag)
+        if preview_only:
+            lines = paginated_content.split('\n')
+            total_lines = len(lines)
+            if total_lines > preview_lines:
+                paginated_content = '\n'.join(lines[:preview_lines]) + f"\n\n... [Preview mode: showing first {preview_lines} of {total_lines} lines. Remove preview_only to read full content]"
+
+        # Extract structured data if requested
+        metadata = {}
+        sections = []
+        tables = []
+        images = result.images if hasattr(result, 'images') else []
+
+        if extract_metadata:
+            file_size = None
+            try:
+                file_size = os.path.getsize(file_path)
+            except (OSError, Exception):
+                pass
+            metadata = {
+                "title": result.title,
+                "file_path": file_path,
+                "file_size": file_size,
+                "pdf_page_count": pdf_page_count,
+            }
+            # Add image metadata if images were extracted
+            if extract_images and images:
+                metadata["image_count"] = len(images)
+                metadata["images_directory"] = images_output_dir or result.metadata.get("images_directory")
+
+        if extract_sections:
+            sections = extract_sections_from_markdown(full_content)
+
+        # Calculate processing time
+        processing_time_ms = int((time.time() - start_time) * 1000)
+
+        # Generate session ID if not provided
+        if not session_id:
+            file_hash = hashlib.md5(file_path.encode()).hexdigest()[:8]
+            session_id = f"pdf_session_{file_hash}_{int(time.time())}"
+
+        # Prepare result based on return format
+        if return_format.lower() == "json":
+            result_dict = {
+                "success": True,
+                "text": paginated_content,
+                "content": paginated_content,  # Keep for compatibility
+                "title": result.title,
+                "metadata": metadata,
+                "sections": sections,
+                "tables": tables,
+                "images": images if extract_images else [],
+                "pagination_info": {
+                    "current_chunk": chunk if offset is None else None,
+                    "total_chunks": max(1, (len(fixed_content) + char_limit - 1) // char_limit) if char_limit else 1,
+                    "chunk_size": char_limit,
+                    "has_more": has_more,
+                    "char_offset": char_offset,
+                    "char_limit": char_limit,
+                    "total_chars": len(fixed_content),
+                },
+                "pdf_pages": pdf_page_count,  # Actual PDF page count (separate from chunk pagination)
+                "session_id": session_id,
+                "processing_time_ms": processing_time_ms,
+            }
+
+            # Include new fields if present
+            if hasattr(result, 'rendered_pages') and result.rendered_pages:
+                result_dict["rendered_pages"] = result.rendered_pages
+            if hasattr(result, 'extracted_tables') and result.extracted_tables:
+                result_dict["extracted_tables"] = result.extracted_tables
+            if hasattr(result, 'form_fields') and result.form_fields:
+                result_dict["form_fields"] = result.form_fields
+            if hasattr(result, 'structure') and result.structure:
+                result_dict["structure"] = result.structure
+            if hasattr(result, 'text_with_coords') and result.text_with_coords:
+                result_dict["text_with_coords"] = result.text_with_coords
+
+            # Check if response might be too large for token limits
+            if len(sections) > 30 or (len(paginated_content) > 8000 and len(sections) > 0):
+                result_dict["warning"] = (
+                    f"Large response with {len(sections)} sections. "
+                    f"If you encounter token limit errors, try using smaller chunk_size (5000-8000) "
+                    f"or switch to return_format='text'."
+                )
+
+            return result_dict
+        else:
+            # Return text format with pagination hints
+            result_text = paginated_content
+
+            # Add image extraction info if requested
+            if extract_images and images:
+                images_info = f"\n\n[Extracted {len(images)} images from PDF. Use return_format='json' to see image details]"
+                result_text = images_info + "\n" + result_text
+
+            # Add pagination hint if there's more content
+            if has_more:
+                total_chars = len(fixed_content)
+                current_end = char_offset + len(paginated_content)
+                total_chunks = max(1, (total_chars + char_limit - 1) // char_limit)
+                pdf_info = f" | PDF: {pdf_page_count} pages" if pdf_page_count else ""
+                result_text += f"\n\n[Chunk {chunk}/{total_chunks}: Characters {char_offset:,}-{current_end:,} of {total_chars:,}{pdf_info}. Continue with chunk={chunk + 1}]"
+
+            return {
+                "success": True,
+                "text": result_text,
+                "content": result_text,
+                "title": result.title,
+                "has_more": has_more,
+                "total_chars": len(fixed_content),
+                "current_chunk": chunk if offset is None else None,
+                "pdf_pages": pdf_page_count,
+                "image_count": len(images) if extract_images else 0,
+            }
+
+    except Exception as e:
+        logger.error(f"Error reading PDF: {e}")
+        processing_time_ms = int((time.time() - start_time) * 1000)
+
+        if return_format.lower() == "json":
+            return {
+                "success": False,
+                "error": str(e),
+                "content": f"Error: Failed to read PDF file: {str(e)}",
+                "processing_time_ms": processing_time_ms,
+            }
+        else:
+            return {
+                "success": False,
+                "error": str(e),
+                "content": f"Error: Failed to read PDF file: {str(e)}",
+            }
+
+
 @mcp.tool()
 async def analyze_image(
     image_path: str,
