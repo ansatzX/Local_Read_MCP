@@ -982,38 +982,53 @@ async def read_with_markitdown(file_path: str, **kwargs):
 
 
 @mcp.tool()
-@mcp.tool()
 async def get_supported_formats() -> Dict[str, Any]:
-    """Get a list of all supported file formats.
+    """List all supported file formats.
 
     Returns:
-        A dictionary listing all supported file extensions.
+        Dictionary with format categories and extensions.
     """
     return {
-        "success": True,
-        "documents": {
-            "pdf": "PDF documents (.pdf)",
-            "docx": "Word documents (.docx)",
-            "xlsx": "Excel spreadsheets (xlsx) - converted to markdown tables",
-            "pptx": "PowerPoint presentations (pptx)",
-            "html": "HTML files (html, .htm)",
+        "text_formats": [
+            {"name": "Plain Text", "extensions": [".txt", ".md", ".py", ".sh", ".log", ".rst"]},
+            {"name": "JSON", "extensions": [".json"]},
+            {"name": "CSV", "extensions": [".csv"]},
+            {"name": "YAML", "extensions": [".yaml", ".yml"]},
+        ],
+        "binary_formats": [
+            {"name": "PDF", "extensions": [".pdf"]},
+            {"name": "Word", "extensions": [".docx", ".doc"]},
+            {"name": "Excel", "extensions": [".xlsx", ".xls"]},
+            {"name": "PowerPoint", "extensions": [".pptx", ".ppt"]},
+            {"name": "HTML", "extensions": [".html", ".htm"]},
+            {"name": "ZIP", "extensions": [".zip"]},
+        ],
+        "tools": {
+            "main": ["read_text_file", "read_binary_file"],
+            "deprecated": ["read_pdf", "read_word", "read_excel", "read_powerpoint", "read_html", "read_text", "read_json", "read_csv", "read_yaml", "read_zip", "read_with_markitdown"],
+            "auxiliary": ["analyze_image", "get_vision_status", "cleanup_temp_files"]
         },
-        "text": {
-            "txt": "Plain text files (txt)",
-            "md": "Markdown files (md)",
-            "json": "JSON files (json)",
-            "yaml": "YAML files (yaml, .yml)",
-            "csv": "CSV files (csv) - converted to markdown tables",
-            "toml": "TOML files (toml)",
-            "py": "Python files (py)",
-            "sh": "Shell scripts (sh)",
-        },
-        "archives": {
-            "zip": "ZIP archives (zip) - lists contents and extracts files",
-        },
-        "fallback": {
-            "markitdown": "MarkItDown fallback - supports many additional formats",
-        },
+        "notes": [
+            "Use read_text_file for text-based formats",
+            "Use read_binary_file for binary/document formats",
+            "File format is auto-detected by extension",
+            "Explicit format parameter can override auto-detection",
+            "Old tools are still available but deprecated",
+            "Deprecated tools will show warnings and forward to new tools"
+        ],
+        "migration_guide": {
+            "read_pdf": "read_binary_file or read_binary_file(format='pdf')",
+            "read_word": "read_binary_file or read_binary_file(format='word')",
+            "read_excel": "read_binary_file or read_binary_file(format='excel')",
+            "read_powerpoint": "read_binary_file or read_binary_file(format='ppt')",
+            "read_html": "read_binary_file or read_binary_file(format='html')",
+            "read_text": "read_text_file or read_text_file(format='text')",
+            "read_json": "read_text_file or read_text_file(format='json')",
+            "read_csv": "read_text_file or read_text_file(format='csv')",
+            "read_yaml": "read_text_file or read_text_file(format='yaml')",
+            "read_zip": "read_binary_file or read_binary_file(format='zip')",
+            "read_with_markitdown": "read_text_file or read_binary_file (auto-detects)",
+        }
     }
 
 
