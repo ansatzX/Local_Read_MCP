@@ -10,12 +10,14 @@ Enhance the PDF parsing capabilities of Local_Read_MCP with comprehensive featur
 
 ## Approach
 
-**PyMuPDF-Centric with Optional Extras** (Approach 1)
+**PyMuPDF-Centric with Optional Extras**
 
 - **Core stack (required):** PyMuPDF (fitz) + pdfminer-six (backward compatibility)
 - **Optional extras (installable via [pdf] extra):** pdfplumber (tables), pytesseract (OCR), pillow (images)
 
-## Architecture
+## Architecture - Unified Tool
+
+**Single enhanced tool:** `read_pdf()` with new parameters to control all features.
 
 ```
 src/local_read_mcp/
@@ -26,10 +28,110 @@ src/local_read_mcp/
 │   ├── pdf_forms.py        # New: Form field handling
 │   └── pdf_inspector.py    # New: Metadata/structure inspection
 └── server/
-    └── app.py              # Add new MCP tools
+    └── app.py              # Enhanced read_pdf tool with new parameters
 ```
 
-## New Modules
+## Unified API: Enhanced read_pdf()
+
+```python
+@mcp.tool()
+def read_pdf(
+    file_path: str,
+    chunk: int = 1,
+    chunk_size: int = 10000,
+    extract_metadata: bool = False,      # Existing parameter
+    extract_sections: bool = False,      # Existing parameter
+    extract_images: bool = False,        # Existing parameter
+    # New parameters
+    render_images: bool = False,          # Render pages to images
+    render_dpi: int = 200,               # Render DPI
+    render_format: str = "png",          # Render format (png/jpeg)
+    extract_tables: bool = False,         # Extract tables
+    extract_forms: bool = False,          # Extract form fields
+    inspect_struct: bool = False,         # Get full structure/metadata
+    include_coords: bool = False,         # Include text coordinates
+    images_output_dir: Optional[str] = None,
+    return_format: str = "json"
+) -> Dict:
+    """
+    Read PDF file with comprehensive feature support.
+
+    New features enabled via parameters:
+    - render_images: Render pages to images for visual inspection
+    - extract_tables: Extract tables (requires pdfplumber)
+    - extract_forms: Extract form fields with types/values/positions
+    - inspect_struct: Get complete structure/metadata/outline/fonts
+    - include_coords: Include bounding box coordinates with text
+    """
+```
+
+## Return Format
+
+```json
+{
+  "title": "Document Title",
+  "text_content": "...",
+  "metadata": {...},
+  "sections": [...],
+  "tables": [],
+  "images": [...],
+  // New optional fields
+  "rendered_pages": [
+    {
+      "page": 1,
+      "path": "/tmp/pdf_images/page001.png",
+      "width": 1654,
+      "height": 2339,
+      "dpi": 200
+    }
+  ],
+  "extracted_tables": [
+    {
+      "page": 1,
+      "table_index": 0,
+      "headers": ["Column 1", "Column 2"],
+      "rows": [["A", "B"], ["C", "D"]],
+      "markdown": "| Column 1 | Column 2 |\n|----------|----------|\n| A        | B        |"
+    }
+  ],
+  "form_fields": [
+    {
+      "name": "first_name",
+      "type": "text",
+      "value": "",
+      "rect": [x0, y0, x1, y1],
+      "page": 0
+    }
+  ],
+  "structure": {
+    "metadata": {
+      "title": "...",
+      "author": "...",
+      "subject": "...",
+      "creation_date": "...",
+      "modification_date": "..."
+    },
+    "page_count": 5,
+    "outline": [
+      {"title": "Section 1", "page": 0, "level": 1}
+    ],
+    "fonts": [...],
+    "has_acroform": false,
+    "is_encrypted": false
+  },
+  "text_with_coords": [
+    {
+      "text": "Hello",
+      "page": 0,
+      "rect": [x0, y0, x1, y1],
+      "font": "Times-Roman",
+      "size": 12
+    }
+  ]
+}
+```
+
+## Internal Modules
 
 ### pdf_rendering.py
 ```python
@@ -47,58 +149,31 @@ def render_pdf_to_images(
 ```python
 def extract_form_fields(pdf_path: str) -> Dict:
     """Extract all form fields with their values, types, and positions."""
-
-def fill_form_fields(
-    pdf_path: str,
-    field_values: Dict[str, Any],
-    output_path: str,
-    flatten: bool = False
-) -> bool:
-    """Fill form fields and save to new PDF."""
 ```
 
 ### pdf_inspector.py
 ```python
 def inspect_pdf(pdf_path: str) -> Dict:
     """Get comprehensive PDF structure information."""
-
-def get_pdf_metadata(pdf_path: str) -> Dict:
-    """Get PDF metadata."""
 ```
 
 ### pdf_tables.py (optional)
 ```python
 def extract_tables(
     pdf_path: str,
-    page_range: Optional[tuple] = None,
-    method: str = "pdfplumber"
+    page_range: Optional[tuple] = None
 ) -> List[Dict]:
-    """Extract tables from PDF."""
+    """Extract tables from PDF using pdfplumber."""
 ```
-
-## New MCP Tools
-
-### 1. render_pdf_to_images
-Render PDF pages to PNG/JPEG images for visual inspection.
-
-### 2. extract_pdf_tables
-Extract tables from PDFs with optional pdfplumber integration.
-
-### 3. extract_pdf_forms
-Extract form fields with types, values, and positions.
-
-### 4. inspect_pdf
-Get comprehensive PDF metadata and structure.
-
-### 5. extract_pdf_text_with_coords
-Extract text with bounding box coordinates.
 
 ## Backward Compatibility
 
-- Existing `read_pdf` tool continues to work unchanged
-- Existing `PdfConverter()` function signature preserved
-- All new tools are additive
-- Optional features show helpful installation messages when dependencies missing
+- **Guaranteed:** All existing parameters and behavior unchanged
+- **Additive only:** New parameters default to False/off
+- **Graceful degradation:** Optional features show helpful error messages:
+  ```
+  "pdfplumber not installed. Install with: uv pip install 'local_read_mcp[pdf]'"
+  ```
 
 ## pyproject.toml Updates
 
@@ -106,22 +181,22 @@ Extract text with bounding box coordinates.
 [project.optional-dependencies]
 pdf = [
     "pdfplumber>=0.10.0",
-    "pytesseract>=0.3.10",
     "pillow>=10.0.0",
 ]
 ```
 
 ## Implementation Phases
 
-1. **Phase 1:** Enhance pdf.py with PyMuPDF text extraction, add pdf_inspector.py
-2. **Phase 2:** Add pdf_rendering.py and render_pdf_to_images tool
-3. **Phase 3:** Add pdf_forms.py and form handling tools
-4. **Phase 4:** Add pdf_tables.py (optional) with pdfplumber integration
-5. **Phase 5:** Add coordinate-aware text extraction
+1. **Phase 1:** Enhance pdf.py with PyMuPDF, add pdf_inspector.py + `inspect_struct` param
+2. **Phase 2:** Add pdf_rendering.py + `render_images` params
+3. **Phase 3:** Add pdf_forms.py + `extract_forms` param
+4. **Phase 4:** Add pdf_tables.py (optional) + `extract_tables` param
+5. **Phase 5:** Add `include_coords` param for coordinate-aware text
 
 ## Success Criteria
 
 - All existing tests pass
-- New tools work with helpful error messages when optional deps missing
-- Backward compatibility maintained
+- Existing `read_pdf` calls continue to work without changes
+- New parameters work as documented
+- Helpful error messages for missing optional dependencies
 - Documentation updated
