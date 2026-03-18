@@ -17,10 +17,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from local_read_mcp.server import (
     apply_pagination,
-    generate_session_id,
     create_simple_converter_wrapper,
     process_document,
 )
+from local_read_mcp.converters import generate_session_id
 from local_read_mcp.converters import DocumentConverterResult
 
 

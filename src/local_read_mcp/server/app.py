@@ -866,107 +866,474 @@ async def read_binary_file(
 # ============================================
 
 @mcp.tool()
-async def read_pdf(file_path: str, **kwargs):
+async def read_pdf(
+    file_path: str,
+    format: Optional[str] = None,
+    # Standard pagination
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    # Standard structured extraction
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text",
+    # PDF-specific features (only used when format=pdf or auto-detected as pdf)
+    extract_images: Optional[bool] = False,
+    render_images: Optional[bool] = False,
+    render_dpi: Optional[int] = 200,
+    render_format: Optional[str] = "png",
+    extract_forms: Optional[bool] = False,
+    inspect_struct: Optional[bool] = False,
+    include_coords: Optional[bool] = False,
+    images_output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """Deprecated: Use read_binary_file instead.
 
     This is a backward compatibility alias for read_binary_file(format="pdf").
     """
     logger.warning("read_pdf is deprecated, use read_binary_file instead (or read_binary_file(format='pdf'))")
-    return await read_binary_file(file_path, format="pdf", **kwargs)
+    return await read_binary_file(
+        file_path=file_path,
+        format="pdf",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+        extract_images=extract_images,
+        render_images=render_images,
+        render_dpi=render_dpi,
+        render_format=render_format,
+        extract_forms=extract_forms,
+        inspect_struct=inspect_struct,
+        include_coords=include_coords,
+        images_output_dir=images_output_dir,
+    )
 
 
 @mcp.tool()
-async def read_word(file_path: str, **kwargs):
+async def read_word(
+    file_path: str,
+    format: Optional[str] = None,
+    # Standard pagination
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    # Standard structured extraction
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text",
+    # PDF-specific features (ignored for Word)
+    extract_images: Optional[bool] = False,
+    render_images: Optional[bool] = False,
+    render_dpi: Optional[int] = 200,
+    render_format: Optional[str] = "png",
+    extract_forms: Optional[bool] = False,
+    inspect_struct: Optional[bool] = False,
+    include_coords: Optional[bool] = False,
+    images_output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """Deprecated: Use read_binary_file instead.
 
     This is a backward compatibility alias for read_binary_file(format="word").
     """
     logger.warning("read_word is deprecated, use read_binary_file instead (or read_binary_file(format='word'))")
-    return await read_binary_file(file_path, format="word", **kwargs)
+    return await read_binary_file(
+        file_path=file_path,
+        format="word",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+    )
 
 
 @mcp.tool()
-async def read_excel(file_path: str, **kwargs):
+async def read_excel(
+    file_path: str,
+    format: Optional[str] = None,
+    # Standard pagination
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    # Standard structured extraction
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text",
+    # PDF-specific features (ignored for Excel)
+    extract_images: Optional[bool] = False,
+    render_images: Optional[bool] = False,
+    render_dpi: Optional[int] = 200,
+    render_format: Optional[str] = "png",
+    extract_forms: Optional[bool] = False,
+    inspect_struct: Optional[bool] = False,
+    include_coords: Optional[bool] = False,
+    images_output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """Deprecated: Use read_binary_file instead.
 
     This is a backward compatibility alias for read_binary_file(format="excel").
     """
     logger.warning("read_excel is deprecated, use read_binary_file instead (or read_binary_file(format='excel'))")
-    return await read_binary_file(file_path, format="excel", **kwargs)
+    return await read_binary_file(
+        file_path=file_path,
+        format="excel",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+    )
 
 
 @mcp.tool()
-async def read_powerpoint(file_path: str, **kwargs):
+async def read_powerpoint(
+    file_path: str,
+    format: Optional[str] = None,
+    # Standard pagination
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    # Standard structured extraction
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text",
+    # PDF-specific features (ignored for PowerPoint)
+    extract_images: Optional[bool] = False,
+    render_images: Optional[bool] = False,
+    render_dpi: Optional[int] = 200,
+    render_format: Optional[str] = "png",
+    extract_forms: Optional[bool] = False,
+    inspect_struct: Optional[bool] = False,
+    include_coords: Optional[bool] = False,
+    images_output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """Deprecated: Use read_binary_file instead.
 
     This is a backward compatibility alias for read_binary_file(format="ppt").
     """
     logger.warning("read_powerpoint is deprecated, use read_binary_file instead (or read_binary_file(format='ppt'))")
-    return await read_binary_file(file_path, format="ppt", **kwargs)
+    return await read_binary_file(
+        file_path=file_path,
+        format="ppt",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+    )
 
 
 @mcp.tool()
-async def read_html(file_path: str, **kwargs):
+async def read_html(
+    file_path: str,
+    format: Optional[str] = None,
+    # Standard pagination
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    # Standard structured extraction
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text",
+    # PDF-specific features (ignored for HTML)
+    extract_images: Optional[bool] = False,
+    render_images: Optional[bool] = False,
+    render_dpi: Optional[int] = 200,
+    render_format: Optional[str] = "png",
+    extract_forms: Optional[bool] = False,
+    inspect_struct: Optional[bool] = False,
+    include_coords: Optional[bool] = False,
+    images_output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """Deprecated: Use read_binary_file instead.
 
     This is a backward compatibility alias for read_binary_file(format="html").
     """
     logger.warning("read_html is deprecated, use read_binary_file instead (or read_binary_file(format='html'))")
-    return await read_binary_file(file_path, format="html", **kwargs)
+    return await read_binary_file(
+        file_path=file_path,
+        format="html",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+    )
 
 
 @mcp.tool()
-async def read_text(file_path: str, **kwargs):
+async def read_text(
+    file_path: str,
+    format: Optional[str] = None,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text"
+) -> Dict[str, Any]:
     """Deprecated: Use read_text_file instead.
 
     This is a backward compatibility alias for read_text_file(format="text").
     """
     logger.warning("read_text is deprecated, use read_text_file instead (or read_text_file(format='text'))")
-    return await read_text_file(file_path, format="text", **kwargs)
+    return await read_text_file(
+        file_path=file_path,
+        format="text",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+    )
 
 
 @mcp.tool()
-async def read_json(file_path: str, **kwargs):
+async def read_json(
+    file_path: str,
+    format: Optional[str] = None,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text"
+) -> Dict[str, Any]:
     """Deprecated: Use read_text_file instead.
 
     This is a backward compatibility alias for read_text_file(format="json").
     """
     logger.warning("read_json is deprecated, use read_text_file instead (or read_text_file(format='json'))")
-    return await read_text_file(file_path, format="json", **kwargs)
+    return await read_text_file(
+        file_path=file_path,
+        format="json",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+    )
 
 
 @mcp.tool()
-async def read_csv(file_path: str, **kwargs):
+async def read_csv(
+    file_path: str,
+    format: Optional[str] = None,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text"
+) -> Dict[str, Any]:
     """Deprecated: Use read_text_file instead.
 
     This is a backward compatibility alias for read_text_file(format="csv").
     """
     logger.warning("read_csv is deprecated, use read_text_file instead (or read_text_file(format='csv'))")
-    return await read_text_file(file_path, format="csv", **kwargs)
+    return await read_text_file(
+        file_path=file_path,
+        format="csv",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+    )
 
 
 @mcp.tool()
-async def read_yaml(file_path: str, **kwargs):
+async def read_yaml(
+    file_path: str,
+    format: Optional[str] = None,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text"
+) -> Dict[str, Any]:
     """Deprecated: Use read_text_file instead.
 
     This is a backward compatibility alias for read_text_file(format="yaml").
     """
     logger.warning("read_yaml is deprecated, use read_text_file instead (or read_text_file(format='yaml'))")
-    return await read_text_file(file_path, format="yaml", **kwargs)
+    return await read_text_file(
+        file_path=file_path,
+        format="yaml",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+    )
 
 
 @mcp.tool()
-async def read_zip(file_path: str, **kwargs):
+async def read_zip(
+    file_path: str,
+    format: Optional[str] = None,
+    # Standard pagination
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    # Standard structured extraction
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text",
+    # PDF-specific features (ignored for ZIP)
+    extract_images: Optional[bool] = False,
+    render_images: Optional[bool] = False,
+    render_dpi: Optional[int] = 200,
+    render_format: Optional[str] = "png",
+    extract_forms: Optional[bool] = False,
+    inspect_struct: Optional[bool] = False,
+    include_coords: Optional[bool] = False,
+    images_output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """Deprecated: Use read_binary_file instead.
 
     This is a backward compatibility alias for read_binary_file(format="zip").
     """
     logger.warning("read_zip is deprecated, use read_binary_file instead (or read_binary_file(format='zip'))")
-    return await read_binary_file(file_path, format="zip", **kwargs)
+    return await read_binary_file(
+        file_path=file_path,
+        format="zip",
+        chunk=chunk,
+        chunk_size=chunk_size,
+        offset=offset,
+        limit=limit,
+        extract_sections=extract_sections,
+        extract_tables=extract_tables,
+        extract_metadata=extract_metadata,
+        preview_only=preview_only,
+        preview_lines=preview_lines,
+        session_id=session_id,
+        return_format=return_format,
+    )
 
 
 @mcp.tool()
-async def read_with_markitdown(file_path: str, **kwargs):
+async def read_with_markitdown(
+    file_path: str,
+    chunk: Optional[int] = 1,
+    chunk_size: Optional[int] = 10000,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    extract_sections: Optional[bool] = False,
+    extract_tables: Optional[bool] = False,
+    extract_metadata: Optional[bool] = False,
+    preview_only: Optional[bool] = False,
+    preview_lines: Optional[int] = 100,
+    session_id: Optional[str] = None,
+    return_format: Optional[str] = "text"
+) -> Dict[str, Any]:
     """Deprecated: Use read_text_file or read_binary_file instead.
 
     This is a backward compatibility alias that uses markitdown fallback.
@@ -976,9 +1343,35 @@ async def read_with_markitdown(file_path: str, **kwargs):
     ext = os.path.splitext(file_path)[1].lower()
     text_exts = ['.txt', '.md', '.py', '.sh', '.log', '.rst', '.json', '.csv', '.yaml', '.yml']
     if ext in text_exts:
-        return await read_text_file(file_path, **kwargs)
+        return await read_text_file(
+            file_path=file_path,
+            chunk=chunk,
+            chunk_size=chunk_size,
+            offset=offset,
+            limit=limit,
+            extract_sections=extract_sections,
+            extract_tables=extract_tables,
+            extract_metadata=extract_metadata,
+            preview_only=preview_only,
+            preview_lines=preview_lines,
+            session_id=session_id,
+            return_format=return_format,
+        )
     else:
-        return await read_binary_file(file_path, **kwargs)
+        return await read_binary_file(
+            file_path=file_path,
+            chunk=chunk,
+            chunk_size=chunk_size,
+            offset=offset,
+            limit=limit,
+            extract_sections=extract_sections,
+            extract_tables=extract_tables,
+            extract_metadata=extract_metadata,
+            preview_only=preview_only,
+            preview_lines=preview_lines,
+            session_id=session_id,
+            return_format=return_format,
+        )
 
 
 @mcp.tool()
