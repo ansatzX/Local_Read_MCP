@@ -4,6 +4,7 @@ Model Context Protocol server for local document processing with vision support.
 
 ## Features
 
+- **Consolidated Tools**: Two main tools: `read_text_file` and `read_binary_file`
 - **Local Processing**: No cloud services required for document conversion
 - **Multi-format Support**: PDF, Word, Excel, PowerPoint, HTML, Text, JSON, CSV, YAML, ZIP
 - **Enhanced PDF Features**: Rendering, table extraction, form handling, metadata inspection, coordinate-aware text extraction
@@ -77,23 +78,29 @@ Restart Claude Code to load the server.
 
 ## Available Tools
 
-| Tool                    | Description                       | Formats                     |
-| ------------------------ | --------------------------------- | ---------------------------- |
-| `read_pdf`             | PDF to markdown (enhanced)       | .pdf                        |
-| `read_word`            | Word to markdown                 | .docx, .doc                |
-| `read_excel`           | Excel to markdown tables           | .xlsx, .xls                |
-| `read_powerpoint`       | PowerPoint to markdown            | .pptx, .ppt                |
-| `read_html`             | HTML to markdown                 | .html, .htm                 |
-| `read_text`             | Plain text files                 | .txt, .md, .py, .sh        |
-| `read_json`             | Parse JSON                      | .json                        |
-| `read_csv`              | CSV to markdown tables            | .csv                         |
-| `read_yaml`             | Parse YAML                       | .yaml, .yml                 |
-| `read_zip`              | List ZIP contents                | .zip                         |
-| `read_with_markitdown`   | Universal fallback                | Many formats                 |
-| `get_supported_formats`  | List all supported formats        | -                            |
-| `analyze_image`          | Analyze images with vision API  | .jpg, .png, .gif, etc.    |
-| `get_vision_status`      | Check vision configuration       | -                            |
-| `cleanup_temp_files`     | Clean up temporary files         | -                            |
+| Tool                    | Description                       | Status       |
+| ------------------------ | --------------------------------- | ------------ |
+| `read_text_file`         | Read text-based files            | **Main**     |
+| `read_binary_file`       | Read binary/document files        | **Main**     |
+| `analyze_image`          | Analyze images with vision API  | Auxiliary    |
+| `get_vision_status`      | Check vision configuration       | Auxiliary    |
+| `cleanup_temp_files`     | Clean up temporary files         | Auxiliary    |
+| `get_supported_formats`  | List all supported formats        | Info         |
+
+### Deprecated Tools (for backward compatibility)
+
+| Tool                    | Migration Guide                   |
+| ------------------------ | --------------------------------- |
+| `read_pdf`             | Use `read_binary_file` or `read_binary_file(format='pdf')` |
+| `read_word`            | Use `read_binary_file` or `read_binary_file(format='word')` |
+| `read_excel`           | Use `read_binary_file` or `read_binary_file(format='excel')` |
+| `read_powerpoint`       | Use `read_binary_file` or `read_binary_file(format='ppt')` |
+| `read_html`             | Use `read_binary_file` or `read_binary_file(format='html')` |
+| `read_text`             | Use `read_text_file` or `read_text_file(format='text')` |
+| `read_json`             | Use `read_text_file` or `read_text_file(format='json')` |
+| `read_csv`              | Use `read_text_file` or `read_text_file(format='csv')` |
+| `read_yaml`             | Use `read_text_file` or `read_text_file(format='yaml')` |
+| `read_zip`              | Use `read_binary_file` or `read_binary_file(format='zip')` |
 
 ### Common Parameters
 
@@ -110,7 +117,7 @@ Restart Claude Code to load the server.
 | `preview_only`     | bool  | False    | Return preview (first N lines)          |
 | `return_format`    | str   | "text"   | Output: "text" or "json"            |
 
-### PDF Enhanced Parameters (read_pdf only)
+### PDF Enhanced Parameters (read_binary_file with format=pdf only)
 
 | Parameter          | Type  | Default | Description                          |
 | ----------------- | ----- | ------- | ------------------------------------ |
@@ -154,42 +161,48 @@ Check vision configuration status.
 
 ## Usage Examples
 
-### PDF Reading
+### Text File Reading
 
 ```python
-# Simple
-read_pdf("/path/to/document.pdf")
+# Simple text file - auto-detects format
+read_text_file("/path/to/document.txt")
+read_text_file("/path/to/data.json")
+read_text_file("/path/to/table.csv")
+
+# Explicit format override
+read_text_file("/path/to/file", format="json")
+read_text_file("/path/to/file", format="csv")
 
 # With pagination
-read_pdf("/path/to/large.pdf", chunk=1, chunk_size=10000)
+read_text_file("/path/to/large.md", chunk=1, chunk_size=10000)
 
-# Extract images
-read_pdf("/path/to/document.pdf", extract_images=True)
+# Extract tables (CSV)
+read_text_file("/path/to/table.csv", extract_tables=True, return_format="json")
+```
 
-# Render pages to images (for visual inspection)
-read_pdf("/path/to/document.pdf", render_images=True, render_dpi=200)
+### Binary/Document File Reading
 
-# Extract tables (requires pdfplumber - install with ".[pdf]")
-read_pdf("/path/to/document.pdf", extract_tables=True, return_format="json")
+```python
+# Simple - auto-detects format
+read_binary_file("/path/to/document.pdf")
+read_binary_file("/path/to/spreadsheet.xlsx")
+read_binary_file("/path/to/archive.zip")
 
-# Extract form fields
-read_pdf("/path/to/form.pdf", extract_forms=True, return_format="json")
+# Explicit format override
+read_binary_file("/path/to/file", format="pdf")
+read_binary_file("/path/to/file", format="excel")
 
-# Get complete PDF structure (metadata, outline, fonts, etc.)
-read_pdf("/path/to/document.pdf", inspect_struct=True, return_format="json")
+# With pagination
+read_binary_file("/path/to/large.pdf", chunk=1, chunk_size=10000)
 
-# Get text with coordinates
-read_pdf("/path/to/document.pdf", include_coords=True, return_format="json")
-
-# All features combined
-read_pdf(
+# PDF with enhanced features
+read_binary_file(
     "/path/to/document.pdf",
     extract_images=True,
     render_images=True,
     extract_tables=True,
     extract_forms=True,
     inspect_struct=True,
-    include_coords=True,
     return_format="json"
 )
 ```
@@ -225,9 +238,9 @@ cleanup_temp_files(custom_directory="/path/to/your/dir")
 ```
 
 **Note:** Temporary files are created when using:
-- `read_pdf(extract_images=True)` - PDF image extraction
-- `read_pdf(render_images=True)` - PDF page rendering
-- `read_zip` - ZIP extraction
+- `read_binary_file(extract_images=True)` - PDF image extraction
+- `read_binary_file(render_images=True)` - PDF page rendering
+- `read_binary_file(format="zip")` - ZIP extraction
 
 ## Development
 
@@ -259,16 +272,17 @@ MIT License
 
 ### 必须使用的MCP工具
 
-- PDF文件 -> 使用 `read_pdf` 工具
-- Word文档 -> 使用 `read_word` 工具
-- Excel表格 -> 使用 `read_excel` 工具
-- PowerPoint -> 使用 `read_powerpoint` 工具
-- HTML文件 -> 使用 `read_html` 工具
-- ZIP压缩包 -> 使用 `read_zip` 工具
+- 文本文件(.txt, .md, .py, .sh, .json, .csv, .yaml, .yml) -> 使用 `read_text_file` 工具
+- PDF文件 -> 使用 `read_binary_file` 工具 (或 `read_binary_file(format='pdf')`)
+- Word文档 -> 使用 `read_binary_file` 工具 (或 `read_binary_file(format='word')`)
+- Excel表格 -> 使用 `read_binary_file` 工具 (或 `read_binary_file(format='excel')`)
+- PowerPoint -> 使用 `read_binary_file` 工具 (或 `read_binary_file(format='ppt')`)
+- HTML文件 -> 使用 `read_binary_file` 工具 (或 `read_binary_file(format='html')`)
+- ZIP压缩包 -> 使用 `read_binary_file` 工具 (或 `read_binary_file(format='zip')`)
 
 ### 临时文件清理
 
-- **重要**: 使用 `read_pdf(extract_images=True)`、`read_pdf(render_images=True)` 或 `read_zip` 后会产生临时文件
+- **重要**: 使用 `read_binary_file(extract_images=True)`、`read_binary_file(render_images=True)` 或 `read_binary_file(format='zip')` 后会产生临时文件
 - **任务结束后**: 确认用户不再需要这些文件时，使用 `cleanup_temp_files` 工具清理
 - 默认清理24小时前的文件，可使用 `older_than_hours=0` 立即清理所有
 
@@ -293,16 +307,17 @@ When reading document files, **strictly follow these rules**:
 
 ### Required MCP Tools
 
-- PDF files -> Use `read_pdf` tool
-- Word documents -> Use `read_word` tool
-- Excel spreadsheets -> Use `read_excel` tool
-- PowerPoint -> Use `read_powerpoint` tool
-- HTML files -> Use `read_html` tool
-- ZIP archives -> Use `read_zip` tool
+- Text files (.txt, .md, .py, .sh, .json, .csv, .yaml, .yml) -> Use `read_text_file` tool
+- PDF files -> Use `read_binary_file` tool (or `read_binary_file(format='pdf')`)
+- Word documents -> Use `read_binary_file` tool (or `read_binary_file(format='word')`)
+- Excel spreadsheets -> Use `read_binary_file` tool (or `read_binary_file(format='excel')`)
+- PowerPoint -> Use `read_binary_file` tool (or `read_binary_file(format='ppt')`)
+- HTML files -> Use `read_binary_file` tool (or `read_binary_file(format='html')`)
+- ZIP archives -> Use `read_binary_file` tool (or `read_binary_file(format='zip')`)
 
 ### Temporary Files Cleanup
 
-- **IMPORTANT**: Using `read_pdf(extract_images=True)`, `read_pdf(render_images=True)`, or `read_zip` creates temporary files
+- **IMPORTANT**: Using `read_binary_file(extract_images=True)`, `read_binary_file(render_images=True)`, or `read_binary_file(format='zip')` creates temporary files
 - **After task completion**: When user confirms no further need for these files, use `cleanup_temp_files` tool to clean up
 - Default cleans files older than 24 hours, use `older_than_hours=0` to clean all immediately
 
