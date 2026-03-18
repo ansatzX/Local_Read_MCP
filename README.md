@@ -8,9 +8,11 @@ Model Context Protocol server for local document processing with vision support.
 - **Local Processing**: No cloud services required for document conversion
 - **Multi-format Support**: PDF, Word, Excel, PowerPoint, HTML, Text, JSON, CSV, YAML, ZIP
 - **Enhanced PDF Features**: Rendering, table extraction, form handling, metadata inspection, coordinate-aware text extraction
+- **Smarter Defaults**: `extract_images` is auto-enabled for PDF when vision is configured (can still be explicitly disabled)
 - **Markdown Output**: All formats convert to readable markdown
 - **MCP Integration**: Seamless with Claude Code and other MCP clients
 - **Vision Analysis**: Analyze images using OpenAI-compatible APIs (Doubao, GPT-4o, etc.)
+- **Stability Improvements**: Deprecated tool forwarding and supported-format metadata are generated from centralized mappings
 
 ## Quick Start
 
@@ -25,7 +27,8 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 # Install basic dependencies
 uv pip install -e .
 
-# OR install with enhanced PDF features (includes pdfplumber for table extraction)
+# PDF features are now included by default in base dependencies.
+# `.[pdf]` is kept only for backward compatibility and is equivalent.
 uv pip install -e ".[pdf]"
 ```
 
@@ -101,6 +104,7 @@ Restart Claude Code to load the server.
 | `read_csv`              | Use `read_text_file` or `read_text_file(format='csv')` |
 | `read_yaml`             | Use `read_text_file` or `read_text_file(format='yaml')` |
 | `read_zip`              | Use `read_binary_file` or `read_binary_file(format='zip')` |
+| `read_with_markitdown`  | Use `read_text_file` or `read_binary_file` (auto-detects by extension) |
 
 ### Common Parameters
 
@@ -113,9 +117,14 @@ Restart Claude Code to load the server.
 | `extract_sections` | bool  | False    | Extract document sections/headings        |
 | `extract_tables`  | bool  | False    | Extract table information                 |
 | `extract_metadata` | bool  | False    | Extract file metadata                   |
-| `extract_images`  | bool  | False    | Extract images (PDF only)              |
+| `extract_images`  | bool  | Auto     | Extract images (PDF only). Auto-enabled when vision is configured; can be explicitly set to `false`. |
 | `preview_only`     | bool  | False    | Return preview (first N lines)          |
 | `return_format`    | str   | "text"   | Output: "text" or "json"            |
+
+`extract_images` behavior:
+- Omitted + vision enabled -> `extract_images=True`
+- Omitted + vision disabled -> `extract_images=False`
+- Explicit `extract_images=False` is always respected
 
 ### PDF Enhanced Parameters (read_binary_file with format=pdf only)
 
@@ -248,12 +257,27 @@ cleanup_temp_files(custom_directory="/path/to/your/dir")
 # Run tests
 uv run pytest src/test/ -v
 
+# Fast test run
+uv run pytest -q
+
 # Format code
 uv run ruff format .
 
 # Lint code
 uv run ruff check .
+
+# Run hotpath benchmark
+uv run python scripts/benchmark_server_hotpaths.py --iterations 200000 --repeats 7
 ```
+
+### Benchmark Snapshot
+
+- Hotpath benchmark doc: `docs/benchmarks/2026-03-18-server-hotpaths.md`
+- Latest recorded result: cached wrapper lookup is about **1.80x** faster than creating wrapper per call.
+
+### Test Status
+
+- Latest local run: `68 passed` (`uv run pytest -q`)
 
 ## License
 

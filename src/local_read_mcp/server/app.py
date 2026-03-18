@@ -8,17 +8,13 @@ A Model Context Protocol server for processing various file formats.
 Converts documents to markdown/text without requiring external APIs.
 """
 
-import sys
 import logging
 import os
 import time
-import json
-import base64
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, Callable
 from fastmcp import FastMCP
 
 from ..converters import (
-    DocumentConverterResult,
     PdfConverter,
     DocxConverter,
     XlsxConverter,
@@ -31,19 +27,12 @@ from ..converters import (
     ZipConverter,
     MarkItDownConverter,
     extract_sections_from_markdown,
-    apply_content_limit,
     generate_session_id,
-    fix_latex_formulas,
-    inspect_pdf,
-    render_pdf_to_images,
-    extract_form_fields,
-    extract_tables,
 )
-from .vision import guess_mime_type_from_extension, call_vision_api
+from .vision import call_vision_api
 from .utils import (
     apply_pagination,
     fix_tool_arguments,
-    DuplicateDetector,
     duplicate_detector,
     create_simple_converter_wrapper,
 )
@@ -64,6 +53,143 @@ else:
     logger.info("Vision features DISABLED - configure VISION_API_KEY or OPENAI_API_KEY in .env file to enable")
 
 
+_SIMPLE_CONVERTER_BUILDERS: Dict[str, tuple[Callable[..., Any], str]] = {
+    "text": (TextConverter, "text"),
+    "json": (JsonConverter, "json"),
+    "csv": (CsvConverter, "csv"),
+    "yaml": (YamlConverter, "yaml"),
+    "ppt": (PptxConverter, "pptx"),
+    "zip": (ZipConverter, "zip"),
+    "markitdown": (MarkItDownConverter, "markitdown"),
+}
+_SIMPLE_CONVERTER_CACHE: Dict[str, Callable[..., Any]] = {}
+
+_FORMAT_BY_EXTENSION: Dict[str, str] = {
+    # Text formats
+    ".txt": "text",
+    ".md": "text",
+    ".py": "text",
+    ".sh": "text",
+    ".log": "text",
+    ".rst": "text",
+    ".json": "json",
+    ".csv": "csv",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    # Binary/document formats
+    ".pdf": "pdf",
+    ".docx": "word",
+    ".doc": "word",
+    ".xlsx": "excel",
+    ".xls": "excel",
+    ".pptx": "ppt",
+    ".ppt": "ppt",
+    ".html": "html",
+    ".htm": "html",
+    ".zip": "zip",
+}
+
+_TEXT_LIKE_EXTENSIONS = {
+    ext for ext, fmt in _FORMAT_BY_EXTENSION.items() if fmt in {"text", "json", "csv", "yaml"}
+}
+_TEXT_FORMAT_GROUPS: list[tuple[str, str]] = [
+    ("Plain Text", "text"),
+    ("JSON", "json"),
+    ("CSV", "csv"),
+    ("YAML", "yaml"),
+]
+_BINARY_FORMAT_GROUPS: list[tuple[str, str]] = [
+    ("PDF", "pdf"),
+    ("Word", "word"),
+    ("Excel", "excel"),
+    ("PowerPoint", "ppt"),
+    ("HTML", "html"),
+    ("ZIP", "zip"),
+]
+_DEPRECATED_TOOL_TO_TARGET_FORMAT: list[tuple[str, str, str]] = [
+    ("read_pdf", "read_binary_file", "pdf"),
+    ("read_word", "read_binary_file", "word"),
+    ("read_excel", "read_binary_file", "excel"),
+    ("read_powerpoint", "read_binary_file", "ppt"),
+    ("read_html", "read_binary_file", "html"),
+    ("read_text", "read_text_file", "text"),
+    ("read_json", "read_text_file", "json"),
+    ("read_csv", "read_text_file", "csv"),
+    ("read_yaml", "read_text_file", "yaml"),
+    ("read_zip", "read_binary_file", "zip"),
+]
+
+
+def get_simple_converter_wrapper(format_name: str) -> Callable[..., Any]:
+    """Get (and cache) wrapper for simple converters."""
+    if format_name in _SIMPLE_CONVERTER_CACHE:
+        return _SIMPLE_CONVERTER_CACHE[format_name]
+
+    converter_func, converter_name = _SIMPLE_CONVERTER_BUILDERS[format_name]
+    wrapper = create_simple_converter_wrapper(converter_func, converter_name)
+    _SIMPLE_CONVERTER_CACHE[format_name] = wrapper
+    return wrapper
+
+
+def _extract_common_read_params(
+    tool_name: str,
+    params: Dict[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Extract shared read_* parameters after applying argument auto-fixes."""
+    fixed_params = fix_tool_arguments(tool_name, params)
+    common_params = {
+        "file_path": fixed_params.get("file_path", params.get("file_path")),
+        "format": fixed_params.get("format", params.get("format")),
+        "chunk": fixed_params.get("chunk", params.get("chunk")),
+        "chunk_size": fixed_params.get("chunk_size", params.get("chunk_size")),
+        "offset": fixed_params.get("offset", params.get("offset")),
+        "limit": fixed_params.get("limit", params.get("limit")),
+        "extract_sections": fixed_params.get("extract_sections", params.get("extract_sections")),
+        "extract_tables": fixed_params.get("extract_tables", params.get("extract_tables")),
+        "extract_metadata": fixed_params.get("extract_metadata", params.get("extract_metadata")),
+        "preview_only": fixed_params.get("preview_only", params.get("preview_only")),
+        "preview_lines": fixed_params.get("preview_lines", params.get("preview_lines")),
+        "session_id": fixed_params.get("session_id", params.get("session_id")),
+        "return_format": fixed_params.get("return_format", params.get("return_format")),
+    }
+    return common_params, fixed_params
+
+
+def _is_text_like_extension(ext: str) -> bool:
+    """Return whether file extension is handled by read_text_file path."""
+    return ext.lower() in _TEXT_LIKE_EXTENSIONS
+
+
+def _extensions_for_format(format_key: str) -> list[str]:
+    """Return all extensions mapped to a specific format key."""
+    return [ext for ext, mapped_format in _FORMAT_BY_EXTENSION.items() if mapped_format == format_key]
+
+
+def _build_supported_format_groups() -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
+    """Build supported format groups from shared extension mapping constants."""
+    text_formats = [
+        {"name": display_name, "extensions": _extensions_for_format(format_key)}
+        for display_name, format_key in _TEXT_FORMAT_GROUPS
+    ]
+    binary_formats = [
+        {"name": display_name, "extensions": _extensions_for_format(format_key)}
+        for display_name, format_key in _BINARY_FORMAT_GROUPS
+    ]
+    return text_formats, binary_formats
+
+
+def _build_deprecated_migration_data() -> tuple[list[str], Dict[str, str]]:
+    """Build deprecated tool list and migration guide from shared mapping data."""
+    deprecated_tools = [tool for tool, _, _ in _DEPRECATED_TOOL_TO_TARGET_FORMAT]
+    migration_guide = {
+        tool: f"{target_tool} or {target_tool}(format='{target_format}')"
+        for tool, target_tool, target_format in _DEPRECATED_TOOL_TO_TARGET_FORMAT
+    }
+    deprecated_tools.append("read_with_markitdown")
+    migration_guide["read_with_markitdown"] = "read_text_file or read_binary_file (auto-detects)"
+    return deprecated_tools, migration_guide
+
+
 def detect_format(file_path: str) -> Optional[str]:
     """Detect file format from extension.
 
@@ -72,32 +198,7 @@ def detect_format(file_path: str) -> Optional[str]:
     """
     ext = os.path.splitext(file_path)[1].lower()
 
-    # Text formats
-    if ext in ['.txt', '.md', '.py', '.sh', '.log', '.rst']:
-        return 'text'
-    elif ext == '.json':
-        return 'json'
-    elif ext == '.csv':
-        return 'csv'
-    elif ext in ['.yaml', '.yml']:
-        return 'yaml'
-
-    # Binary/document formats
-    elif ext == '.pdf':
-        return 'pdf'
-    elif ext in ['.docx', '.doc']:
-        return 'word'
-    elif ext in ['.xlsx', '.xls']:
-        return 'excel'
-    elif ext in ['.pptx', '.ppt']:
-        return 'ppt'
-    elif ext in ['.html', '.htm']:
-        return 'html'
-    elif ext == '.zip':
-        return 'zip'
-
-    # Unknown - use markitdown fallback
-    return None
+    return _FORMAT_BY_EXTENSION.get(ext)
 
 
 async def process_pdf_document(
@@ -272,7 +373,7 @@ async def process_pdf_document(
                 "content": result_text,
                 "title": result.title,
                 "has_more": has_more,
-                "total_chars": len(fixed_content),
+                "total_chars": len(full_content),
                 "current_chunk": chunk if offset is None else None,
                 "pdf_pages": pdf_page_count,
                 "image_count": len(images) if extract_images else 0,
@@ -587,48 +688,38 @@ async def read_text_file(
         A dictionary containing the text content or error message.
         If return_format='json', returns enhanced structure with metadata, sections, pagination_info, session_id.
     """
-    # Apply parameter auto-fix for common naming mistakes
-    local_vars = locals().copy()
-    fixed_params = fix_tool_arguments("read_text_file", local_vars)
+    common_params, _ = _extract_common_read_params("read_text_file", locals().copy())
 
-    # Extract fixed parameters
-    file_path = fixed_params.get("file_path", file_path)
-    format = fixed_params.get("format", format)
-    chunk = fixed_params.get("chunk", chunk)
-    chunk_size = fixed_params.get("chunk_size", chunk_size)
-    offset = fixed_params.get("offset", offset)
-    limit = fixed_params.get("limit", limit)
-    extract_sections = fixed_params.get("extract_sections", extract_sections)
-    extract_tables = fixed_params.get("extract_tables", extract_tables)
-    extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
-    preview_only = fixed_params.get("preview_only", preview_only)
-    preview_lines = fixed_params.get("preview_lines", preview_lines)
-    session_id = fixed_params.get("session_id", session_id)
-    return_format = fixed_params.get("return_format", return_format)
+    file_path = common_params["file_path"]
+    format = common_params["format"]
+    chunk = common_params["chunk"]
+    chunk_size = common_params["chunk_size"]
+    offset = common_params["offset"]
+    limit = common_params["limit"]
+    extract_sections = common_params["extract_sections"]
+    extract_tables = common_params["extract_tables"]
+    extract_metadata = common_params["extract_metadata"]
+    preview_only = common_params["preview_only"]
+    preview_lines = common_params["preview_lines"]
+    session_id = common_params["session_id"]
+    return_format = common_params["return_format"]
 
     # Auto-detect format if not provided
     if not format:
         format = detect_format(file_path)
 
     # Map format to converter
-    converter_func = None
     converter_kwargs = {
         "extract_metadata": extract_metadata,
         "extract_sections": extract_sections,
         "extract_tables": extract_tables,
     }
 
-    if format == "text":
-        converter_func = create_simple_converter_wrapper(TextConverter, "text")
-    elif format == "json":
-        converter_func = create_simple_converter_wrapper(JsonConverter, "json")
-    elif format == "csv":
-        converter_func = create_simple_converter_wrapper(CsvConverter, "csv")
-    elif format == "yaml":
-        converter_func = create_simple_converter_wrapper(YamlConverter, "yaml")
+    if format in {"text", "json", "csv", "yaml"}:
+        converter_func = get_simple_converter_wrapper(format)
     else:
         # Unknown format - use markitdown fallback
-        converter_func = create_simple_converter_wrapper(MarkItDownConverter, "markitdown")
+        converter_func = get_simple_converter_wrapper("markitdown")
 
     return await process_document(
         file_path=file_path,
@@ -666,7 +757,7 @@ async def read_binary_file(
     session_id: Optional[str] = None,
     return_format: Optional[str] = "text",
     # PDF-specific features (only used when format=pdf or auto-detected as pdf)
-    extract_images: Optional[bool] = False,
+    extract_images: Optional[bool] = None,
     render_images: Optional[bool] = False,
     render_dpi: Optional[int] = 200,
     render_format: Optional[str] = "png",
@@ -701,7 +792,7 @@ async def read_binary_file(
         preview_lines: Number of lines for preview mode. Default: 100.
         session_id: Session ID for resuming pagination. Reuse for consecutive chunk requests.
         return_format: Output format: 'json' (structured with metadata/sections) or 'text' (plain). Default: 'text'.
-        extract_images: Extract images from PDF. Saves images to output directory and returns image info. Default: False.
+        extract_images: Extract images from PDF. If omitted, auto-enabled when vision is configured; otherwise disabled.
         render_images: Render PDF pages to images. Default: False.
         render_dpi: DPI for rendered images. Default: 200.
         render_format: Format for rendered images (png or jpeg). Default: png.
@@ -714,25 +805,22 @@ async def read_binary_file(
         A dictionary containing the text content or error message.
         If return_format='json', returns enhanced structure with metadata, sections, pagination_info, pdf_pages, images, session_id.
     """
-    # Auto-enable extract_images if vision is configured and not explicitly set
-    if extract_images is None and VISION_ENABLED:
-        extract_images = True
-        logger.info("Vision enabled: auto-enabling extract_images=True for PDF")
+    common_params, fixed_params = _extract_common_read_params("read_binary_file", locals().copy())
 
-    # Apply parameter auto-fix for common naming mistakes
-    local_vars = locals().copy()
-    fixed_params = fix_tool_arguments("read_binary_file", local_vars)
+    file_path = common_params["file_path"]
+    format = common_params["format"]
+    chunk = common_params["chunk"]
+    chunk_size = common_params["chunk_size"]
+    offset = common_params["offset"]
+    limit = common_params["limit"]
+    extract_sections = common_params["extract_sections"]
+    extract_tables = common_params["extract_tables"]
+    extract_metadata = common_params["extract_metadata"]
+    preview_only = common_params["preview_only"]
+    preview_lines = common_params["preview_lines"]
+    session_id = common_params["session_id"]
+    return_format = common_params["return_format"]
 
-    # Extract fixed parameters
-    file_path = fixed_params.get("file_path", file_path)
-    format = fixed_params.get("format", format)
-    chunk = fixed_params.get("chunk", chunk)
-    chunk_size = fixed_params.get("chunk_size", chunk_size)
-    offset = fixed_params.get("offset", offset)
-    limit = fixed_params.get("limit", limit)
-    extract_sections = fixed_params.get("extract_sections", extract_sections)
-    extract_tables = fixed_params.get("extract_tables", extract_tables)
-    extract_metadata = fixed_params.get("extract_metadata", extract_metadata)
     extract_images = fixed_params.get("extract_images", extract_images)
     render_images = fixed_params.get("render_images", render_images)
     render_dpi = fixed_params.get("render_dpi", render_dpi)
@@ -741,10 +829,12 @@ async def read_binary_file(
     inspect_struct = fixed_params.get("inspect_struct", inspect_struct)
     include_coords = fixed_params.get("include_coords", include_coords)
     images_output_dir = fixed_params.get("images_output_dir", images_output_dir)
-    preview_only = fixed_params.get("preview_only", preview_only)
-    preview_lines = fixed_params.get("preview_lines", preview_lines)
-    session_id = fixed_params.get("session_id", session_id)
-    return_format = fixed_params.get("return_format", return_format)
+
+    # Auto-enable extract_images if vision is configured and value was not explicitly set
+    if extract_images is None:
+        extract_images = bool(VISION_ENABLED)
+        if extract_images:
+            logger.info("Vision enabled: auto-enabling extract_images=True for PDF")
 
     # Auto-detect format if not provided
     if not format:
@@ -776,7 +866,6 @@ async def read_binary_file(
         )
 
     # All other formats use process_document
-    converter_func = None
     converter_kwargs = {
         "extract_metadata": extract_metadata,
         "extract_sections": extract_sections,
@@ -788,14 +877,14 @@ async def read_binary_file(
     elif format == "excel":
         converter_func = XlsxConverter
     elif format == "ppt":
-        converter_func = create_simple_converter_wrapper(PptxConverter, "pptx")
+        converter_func = get_simple_converter_wrapper("ppt")
     elif format == "html":
         converter_func = HtmlConverter
     elif format == "zip":
-        converter_func = create_simple_converter_wrapper(ZipConverter, "zip")
+        converter_func = get_simple_converter_wrapper("zip")
     else:
         # Unknown format - use markitdown fallback
-        converter_func = create_simple_converter_wrapper(MarkItDownConverter, "markitdown")
+        converter_func = get_simple_converter_wrapper("markitdown")
 
     return await process_document(
         file_path=file_path,
@@ -818,6 +907,19 @@ async def read_binary_file(
 # ============================================
 # Deprecated tools - for backward compatibility
 # ============================================
+
+async def _forward_tool_fn(
+    tool: Any,
+    params: Dict[str, Any],
+    forced_format: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Forward deprecated tool calls to the target tool's raw function."""
+    forward_params = dict(params)
+    forward_params.pop("format", None)
+    if forced_format is not None:
+        forward_params["format"] = forced_format
+    return await tool.fn(**forward_params)
+
 
 @mcp.tool()
 async def read_pdf(
@@ -851,29 +953,7 @@ async def read_pdf(
     This is a backward compatibility alias for read_binary_file(format="pdf").
     """
     logger.warning("read_pdf is deprecated, use read_binary_file instead (or read_binary_file(format='pdf'))")
-    return await read_binary_file(
-        file_path=file_path,
-        format="pdf",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-        extract_images=extract_images,
-        render_images=render_images,
-        render_dpi=render_dpi,
-        render_format=render_format,
-        extract_forms=extract_forms,
-        inspect_struct=inspect_struct,
-        include_coords=include_coords,
-        images_output_dir=images_output_dir,
-    )
+    return await _forward_tool_fn(read_binary_file, locals(), forced_format="pdf")
 
 
 @mcp.tool()
@@ -908,21 +988,7 @@ async def read_word(
     This is a backward compatibility alias for read_binary_file(format="word").
     """
     logger.warning("read_word is deprecated, use read_binary_file instead (or read_binary_file(format='word'))")
-    return await read_binary_file(
-        file_path=file_path,
-        format="word",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-    )
+    return await _forward_tool_fn(read_binary_file, locals(), forced_format="word")
 
 
 @mcp.tool()
@@ -957,21 +1023,7 @@ async def read_excel(
     This is a backward compatibility alias for read_binary_file(format="excel").
     """
     logger.warning("read_excel is deprecated, use read_binary_file instead (or read_binary_file(format='excel'))")
-    return await read_binary_file(
-        file_path=file_path,
-        format="excel",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-    )
+    return await _forward_tool_fn(read_binary_file, locals(), forced_format="excel")
 
 
 @mcp.tool()
@@ -1006,21 +1058,7 @@ async def read_powerpoint(
     This is a backward compatibility alias for read_binary_file(format="ppt").
     """
     logger.warning("read_powerpoint is deprecated, use read_binary_file instead (or read_binary_file(format='ppt'))")
-    return await read_binary_file(
-        file_path=file_path,
-        format="ppt",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-    )
+    return await _forward_tool_fn(read_binary_file, locals(), forced_format="ppt")
 
 
 @mcp.tool()
@@ -1055,21 +1093,7 @@ async def read_html(
     This is a backward compatibility alias for read_binary_file(format="html").
     """
     logger.warning("read_html is deprecated, use read_binary_file instead (or read_binary_file(format='html'))")
-    return await read_binary_file(
-        file_path=file_path,
-        format="html",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-    )
+    return await _forward_tool_fn(read_binary_file, locals(), forced_format="html")
 
 
 @mcp.tool()
@@ -1093,21 +1117,7 @@ async def read_text(
     This is a backward compatibility alias for read_text_file(format="text").
     """
     logger.warning("read_text is deprecated, use read_text_file instead (or read_text_file(format='text'))")
-    return await read_text_file(
-        file_path=file_path,
-        format="text",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-    )
+    return await _forward_tool_fn(read_text_file, locals(), forced_format="text")
 
 
 @mcp.tool()
@@ -1131,21 +1141,7 @@ async def read_json(
     This is a backward compatibility alias for read_text_file(format="json").
     """
     logger.warning("read_json is deprecated, use read_text_file instead (or read_text_file(format='json'))")
-    return await read_text_file(
-        file_path=file_path,
-        format="json",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-    )
+    return await _forward_tool_fn(read_text_file, locals(), forced_format="json")
 
 
 @mcp.tool()
@@ -1169,21 +1165,7 @@ async def read_csv(
     This is a backward compatibility alias for read_text_file(format="csv").
     """
     logger.warning("read_csv is deprecated, use read_text_file instead (or read_text_file(format='csv'))")
-    return await read_text_file(
-        file_path=file_path,
-        format="csv",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-    )
+    return await _forward_tool_fn(read_text_file, locals(), forced_format="csv")
 
 
 @mcp.tool()
@@ -1207,21 +1189,7 @@ async def read_yaml(
     This is a backward compatibility alias for read_text_file(format="yaml").
     """
     logger.warning("read_yaml is deprecated, use read_text_file instead (or read_text_file(format='yaml'))")
-    return await read_text_file(
-        file_path=file_path,
-        format="yaml",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-    )
+    return await _forward_tool_fn(read_text_file, locals(), forced_format="yaml")
 
 
 @mcp.tool()
@@ -1256,21 +1224,7 @@ async def read_zip(
     This is a backward compatibility alias for read_binary_file(format="zip").
     """
     logger.warning("read_zip is deprecated, use read_binary_file instead (or read_binary_file(format='zip'))")
-    return await read_binary_file(
-        file_path=file_path,
-        format="zip",
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format,
-    )
+    return await _forward_tool_fn(read_binary_file, locals(), forced_format="zip")
 
 
 @mcp.tool()
@@ -1293,39 +1247,26 @@ async def read_with_markitdown(
     This is a backward compatibility alias that uses markitdown fallback.
     """
     logger.warning("read_with_markitdown is deprecated, use read_text_file or read_binary_file instead")
+    forward_params = {
+        "file_path": file_path,
+        "chunk": chunk,
+        "chunk_size": chunk_size,
+        "offset": offset,
+        "limit": limit,
+        "extract_sections": extract_sections,
+        "extract_tables": extract_tables,
+        "extract_metadata": extract_metadata,
+        "preview_only": preview_only,
+        "preview_lines": preview_lines,
+        "session_id": session_id,
+        "return_format": return_format,
+    }
     # Try to detect and use appropriate tool
     ext = os.path.splitext(file_path)[1].lower()
-    text_exts = ['.txt', '.md', '.py', '.sh', '.log', '.rst', '.json', '.csv', '.yaml', '.yml']
-    if ext in text_exts:
-        return await read_text_file(
-            file_path=file_path,
-            chunk=chunk,
-            chunk_size=chunk_size,
-            offset=offset,
-            limit=limit,
-            extract_sections=extract_sections,
-            extract_tables=extract_tables,
-            extract_metadata=extract_metadata,
-            preview_only=preview_only,
-            preview_lines=preview_lines,
-            session_id=session_id,
-            return_format=return_format,
-        )
+    if _is_text_like_extension(ext):
+        return await _forward_tool_fn(read_text_file, forward_params)
     else:
-        return await read_binary_file(
-            file_path=file_path,
-            chunk=chunk,
-            chunk_size=chunk_size,
-            offset=offset,
-            limit=limit,
-            extract_sections=extract_sections,
-            extract_tables=extract_tables,
-            extract_metadata=extract_metadata,
-            preview_only=preview_only,
-            preview_lines=preview_lines,
-            session_id=session_id,
-            return_format=return_format,
-        )
+        return await _forward_tool_fn(read_binary_file, forward_params)
 
 
 @mcp.tool()
@@ -1335,24 +1276,14 @@ async def get_supported_formats() -> Dict[str, Any]:
     Returns:
         Dictionary with format categories and extensions.
     """
+    text_formats, binary_formats = _build_supported_format_groups()
+    deprecated_tools, migration_guide = _build_deprecated_migration_data()
     return {
-        "text_formats": [
-            {"name": "Plain Text", "extensions": [".txt", ".md", ".py", ".sh", ".log", ".rst"]},
-            {"name": "JSON", "extensions": [".json"]},
-            {"name": "CSV", "extensions": [".csv"]},
-            {"name": "YAML", "extensions": [".yaml", ".yml"]},
-        ],
-        "binary_formats": [
-            {"name": "PDF", "extensions": [".pdf"]},
-            {"name": "Word", "extensions": [".docx", ".doc"]},
-            {"name": "Excel", "extensions": [".xlsx", ".xls"]},
-            {"name": "PowerPoint", "extensions": [".pptx", ".ppt"]},
-            {"name": "HTML", "extensions": [".html", ".htm"]},
-            {"name": "ZIP", "extensions": [".zip"]},
-        ],
+        "text_formats": text_formats,
+        "binary_formats": binary_formats,
         "tools": {
             "main": ["read_text_file", "read_binary_file"],
-            "deprecated": ["read_pdf", "read_word", "read_excel", "read_powerpoint", "read_html", "read_text", "read_json", "read_csv", "read_yaml", "read_zip", "read_with_markitdown"],
+            "deprecated": deprecated_tools,
             "auxiliary": ["analyze_image", "get_vision_status", "cleanup_temp_files"]
         },
         "notes": [
@@ -1363,19 +1294,7 @@ async def get_supported_formats() -> Dict[str, Any]:
             "Old tools are still available but deprecated",
             "Deprecated tools will show warnings and forward to new tools"
         ],
-        "migration_guide": {
-            "read_pdf": "read_binary_file or read_binary_file(format='pdf')",
-            "read_word": "read_binary_file or read_binary_file(format='word')",
-            "read_excel": "read_binary_file or read_binary_file(format='excel')",
-            "read_powerpoint": "read_binary_file or read_binary_file(format='ppt')",
-            "read_html": "read_binary_file or read_binary_file(format='html')",
-            "read_text": "read_text_file or read_text_file(format='text')",
-            "read_json": "read_text_file or read_text_file(format='json')",
-            "read_csv": "read_text_file or read_text_file(format='csv')",
-            "read_yaml": "read_text_file or read_text_file(format='yaml')",
-            "read_zip": "read_binary_file or read_binary_file(format='zip')",
-            "read_with_markitdown": "read_text_file or read_binary_file (auto-detects)",
-        }
+        "migration_guide": migration_guide
     }
 
 
