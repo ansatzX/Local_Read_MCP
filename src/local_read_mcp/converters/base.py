@@ -87,6 +87,11 @@ class DocumentConverterResult:
         pagination_info: Pagination details (page count, offsets, etc.)
         processing_time_ms: Processing time in milliseconds (optional)
         error: Error message if conversion failed (optional)
+        rendered_pages: List of rendered page information (for PDF rendering)
+        extracted_tables: List of extracted table data
+        form_fields: List of form field data
+        structure: Document structure information
+        text_with_coords: List of text with coordinate information
 
     Example:
         >>> result = DocumentConverterResult(
@@ -108,7 +113,13 @@ class DocumentConverterResult:
         images: Optional[List[Dict[str, Any]]] = None,
         pagination_info: Optional[Dict[str, Any]] = None,
         processing_time_ms: Optional[int] = None,
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        # New fields
+        rendered_pages: Optional[List[Dict[str, Any]]] = None,
+        extracted_tables: Optional[List[Dict[str, Any]]] = None,
+        form_fields: Optional[List[Dict[str, Any]]] = None,
+        structure: Optional[Dict[str, Any]] = None,
+        text_with_coords: Optional[List[Dict[str, Any]]] = None,
     ):
         """Initialize document converter result.
 
@@ -122,6 +133,11 @@ class DocumentConverterResult:
             pagination_info: Pagination information (default: empty dict)
             processing_time_ms: Processing time in milliseconds (optional)
             error: Error message if failed (optional)
+            rendered_pages: List of rendered page information (default: empty list)
+            extracted_tables: List of extracted table data (default: empty list)
+            form_fields: List of form field data (default: empty list)
+            structure: Document structure information (default: empty dict)
+            text_with_coords: List of text with coordinate information (default: empty list)
         """
         self.title: Union[str, None] = title
         self.text_content: str = text_content
@@ -132,6 +148,11 @@ class DocumentConverterResult:
         self.pagination_info = pagination_info or {}
         self.processing_time_ms = processing_time_ms
         self.error = error
+        self.rendered_pages = rendered_pages or []
+        self.extracted_tables = extracted_tables or []
+        self.form_fields = form_fields or []
+        self.structure = structure or {}
+        self.text_with_coords = text_with_coords or []
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to dictionary for JSON serialization.
@@ -150,9 +171,20 @@ class DocumentConverterResult:
             "text_content": self.text_content,
             "metadata": self.metadata,
             "sections": self.sections,
-            "tables": self.tables,
+            "tables": self.tables,  # Keep for backward compatibility
             "pagination_info": self.pagination_info,
         }
+        # Add new fields only if they exist and are non-empty
+        if hasattr(self, 'rendered_pages') and self.rendered_pages:
+            result["rendered_pages"] = self.rendered_pages
+        if hasattr(self, 'extracted_tables') and self.extracted_tables:
+            result["extracted_tables"] = self.extracted_tables
+        if hasattr(self, 'form_fields') and self.form_fields:
+            result["form_fields"] = self.form_fields
+        if hasattr(self, 'structure') and self.structure:
+            result["structure"] = self.structure
+        if hasattr(self, 'text_with_coords') and self.text_with_coords:
+            result["text_with_coords"] = self.text_with_coords
         if self.processing_time_ms is not None:
             result["processing_time_ms"] = self.processing_time_ms
         if self.error is not None:
