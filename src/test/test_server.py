@@ -8,8 +8,6 @@ including tests for all document reading tools and helper functions.
 import pytest
 import os
 import tempfile
-import json
-from types import SimpleNamespace
 from pathlib import Path
 
 # Import the server module
@@ -255,17 +253,16 @@ class TestServerIntegration:
 
     @pytest.mark.asyncio
     async def test_get_supported_formats(self):
-        """Test get_supported_formats tool."""
+        """Test get_supported_formats tool returns correct structure."""
         result = await server_app.get_supported_formats.fn()
 
         assert "text_formats" in result
         assert "binary_formats" in result
         assert "tools" in result
-        assert "migration_guide" in result
-        assert "read_pdf" in result["tools"]["deprecated"]
-        assert "read_with_markitdown" in result["tools"]["deprecated"]
-        assert "read_pdf" in result["migration_guide"]
-        assert "read_with_markitdown" in result["migration_guide"]
+        assert "notes" in result
+        assert "migration_guide" not in result
+        assert result["tools"]["main"] == ["read_text_file", "read_binary_file"]
+        assert result["tools"]["auxiliary"] == ["analyze_image", "get_vision_status", "cleanup_temp_files"]
 
 
 class TestProcessPdfDocument:
@@ -349,134 +346,6 @@ class TestConverterWrapperCaching:
         assert wrapper_create_calls == 1
         assert len(converter_ids) == 2
         assert converter_ids[0] == converter_ids[1]
-
-
-class TestDeprecatedToolForwarding:
-    """Tests for deprecated tool forwarding paths."""
-
-    @pytest.mark.asyncio
-    async def test_read_text_deprecated_forwards_to_read_text_file_fn(self, monkeypatch):
-        """read_text should delegate to read_text_file.fn with format=text."""
-        called = {}
-
-        async def fake_read_text_file_fn(**kwargs):
-            called.update(kwargs)
-            return {"success": True, "source": "read_text_file"}
-
-        monkeypatch.setattr(
-            server_app,
-            "read_text_file",
-            SimpleNamespace(fn=fake_read_text_file_fn),
-        )
-
-        result = await server_app.read_text.fn(file_path="/tmp/a.txt")
-
-        assert result["success"] is True
-        assert called["format"] == "text"
-        assert called["file_path"] == "/tmp/a.txt"
-
-    @pytest.mark.asyncio
-    async def test_read_pdf_deprecated_forwards_to_read_binary_file_fn(self, monkeypatch):
-        """read_pdf should delegate to read_binary_file.fn with format=pdf."""
-        called = {}
-
-        async def fake_read_binary_file_fn(**kwargs):
-            called.update(kwargs)
-            return {"success": True, "source": "read_binary_file"}
-
-        monkeypatch.setattr(
-            server_app,
-            "read_binary_file",
-            SimpleNamespace(fn=fake_read_binary_file_fn),
-        )
-
-        result = await server_app.read_pdf.fn(file_path="/tmp/a.pdf")
-
-        assert result["success"] is True
-        assert called["format"] == "pdf"
-        assert called["file_path"] == "/tmp/a.pdf"
-
-    @pytest.mark.asyncio
-    async def test_read_pdf_deprecated_forces_pdf_format(self, monkeypatch):
-        """Deprecated read_pdf should always force format=pdf."""
-        called = {}
-
-        async def fake_read_binary_file_fn(**kwargs):
-            called.update(kwargs)
-            return {"success": True}
-
-        monkeypatch.setattr(
-            server_app,
-            "read_binary_file",
-            SimpleNamespace(fn=fake_read_binary_file_fn),
-        )
-
-        await server_app.read_pdf.fn(file_path="/tmp/a.pdf", format="word", chunk=2)
-
-        assert called["format"] == "pdf"
-        assert called["chunk"] == 2
-
-    @pytest.mark.asyncio
-    async def test_read_with_markitdown_uses_forwarded_fn(self, monkeypatch):
-        """read_with_markitdown should route to read_text_file.fn for text extensions."""
-        called = {}
-
-        async def fake_read_text_file_fn(**kwargs):
-            called["tool"] = "text"
-            called.update(kwargs)
-            return {"success": True}
-
-        async def fake_read_binary_file_fn(**kwargs):
-            called["tool"] = "binary"
-            called.update(kwargs)
-            return {"success": True}
-
-        monkeypatch.setattr(
-            server_app,
-            "read_text_file",
-            SimpleNamespace(fn=fake_read_text_file_fn),
-        )
-        monkeypatch.setattr(
-            server_app,
-            "read_binary_file",
-            SimpleNamespace(fn=fake_read_binary_file_fn),
-        )
-
-        await server_app.read_with_markitdown.fn(file_path="/tmp/a.txt")
-
-        assert called["tool"] == "text"
-        assert called["file_path"] == "/tmp/a.txt"
-
-    @pytest.mark.asyncio
-    async def test_read_with_markitdown_routes_binary_extension(self, monkeypatch):
-        """read_with_markitdown should route to read_binary_file.fn for binary extensions."""
-        called = {}
-
-        async def fake_read_text_file_fn(**kwargs):
-            called["tool"] = "text"
-            called.update(kwargs)
-            return {"success": True}
-
-        async def fake_read_binary_file_fn(**kwargs):
-            called["tool"] = "binary"
-            called.update(kwargs)
-            return {"success": True}
-
-        monkeypatch.setattr(
-            server_app,
-            "read_text_file",
-            SimpleNamespace(fn=fake_read_text_file_fn),
-        )
-        monkeypatch.setattr(
-            server_app,
-            "read_binary_file",
-            SimpleNamespace(fn=fake_read_binary_file_fn),
-        )
-
-        await server_app.read_with_markitdown.fn(file_path="/tmp/a.pdf")
-
-        assert called["tool"] == "binary"
-        assert called["file_path"] == "/tmp/a.pdf"
 
 
 class TestReadBinaryFileExtractImagesDefault:
@@ -602,17 +471,6 @@ class TestParameterExtractionHelpers:
 class TestFormatExtensionHelpers:
     """Tests for format/extension helper functions."""
 
-    def test_is_text_like_extension(self):
-        """Text-like extension helper should classify known extensions correctly."""
-        assert server_app._is_text_like_extension(".txt") is True
-        assert server_app._is_text_like_extension(".json") is True
-        assert server_app._is_text_like_extension(".pdf") is False
-        assert server_app._is_text_like_extension(".unknown") is False
-
-
-class TestSupportedFormatsBuilder:
-    """Tests for supported format data builder helpers."""
-
     def test_build_supported_format_groups(self):
         """Builder should generate text/binary groups from extension mapping."""
         text_formats, binary_formats = server_app._build_supported_format_groups()
@@ -621,16 +479,6 @@ class TestSupportedFormatsBuilder:
         assert text_formats[0]["extensions"] == [".txt", ".md", ".py", ".sh", ".log", ".rst"]
         assert any(item["name"] == "PDF" and item["extensions"] == [".pdf"] for item in binary_formats)
         assert any(item["name"] == "Word" and item["extensions"] == [".docx", ".doc"] for item in binary_formats)
-
-    def test_build_migration_guide_and_deprecated_tools(self):
-        """Builder should generate deprecated tool list and migration guide consistently."""
-        deprecated_tools, migration_guide = server_app._build_deprecated_migration_data()
-
-        assert deprecated_tools[:3] == ["read_pdf", "read_word", "read_excel"]
-        assert deprecated_tools[-1] == "read_with_markitdown"
-        assert migration_guide["read_pdf"] == "read_binary_file or read_binary_file(format='pdf')"
-        assert migration_guide["read_text"] == "read_text_file or read_text_file(format='text')"
-        assert migration_guide["read_with_markitdown"] == "read_text_file or read_binary_file (auto-detects)"
 
 
 if __name__ == "__main__":
