@@ -3,7 +3,7 @@
 import logging
 import os
 import time
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Optional
 
 from ..converters import (
     DocumentConverterResult,

@@ -89,9 +89,6 @@ _FORMAT_BY_EXTENSION: Dict[str, str] = {
     ".zip": "zip",
 }
 
-_TEXT_LIKE_EXTENSIONS = {
-    ext for ext, fmt in _FORMAT_BY_EXTENSION.items() if fmt in {"text", "json", "csv", "yaml"}
-}
 _TEXT_FORMAT_GROUPS: list[tuple[str, str]] = [
     ("Plain Text", "text"),
     ("JSON", "json"),
@@ -106,20 +103,6 @@ _BINARY_FORMAT_GROUPS: list[tuple[str, str]] = [
     ("HTML", "html"),
     ("ZIP", "zip"),
 ]
-_DEPRECATED_TOOL_TO_TARGET_FORMAT: list[tuple[str, str, str]] = [
-    ("read_pdf", "read_binary_file", "pdf"),
-    ("read_word", "read_binary_file", "word"),
-    ("read_excel", "read_binary_file", "excel"),
-    ("read_powerpoint", "read_binary_file", "ppt"),
-    ("read_html", "read_binary_file", "html"),
-    ("read_text", "read_text_file", "text"),
-    ("read_json", "read_text_file", "json"),
-    ("read_csv", "read_text_file", "csv"),
-    ("read_yaml", "read_text_file", "yaml"),
-    ("read_zip", "read_binary_file", "zip"),
-]
-
-
 def get_simple_converter_wrapper(format_name: str) -> Callable[..., Any]:
     """Get (and cache) wrapper for simple converters."""
     if format_name in _SIMPLE_CONVERTER_CACHE:
@@ -155,11 +138,6 @@ def _extract_common_read_params(
     return common_params, fixed_params
 
 
-def _is_text_like_extension(ext: str) -> bool:
-    """Return whether file extension is handled by read_text_file path."""
-    return ext.lower() in _TEXT_LIKE_EXTENSIONS
-
-
 def _extensions_for_format(format_key: str) -> list[str]:
     """Return all extensions mapped to a specific format key."""
     return [ext for ext, mapped_format in _FORMAT_BY_EXTENSION.items() if mapped_format == format_key]
@@ -176,18 +154,6 @@ def _build_supported_format_groups() -> tuple[list[Dict[str, Any]], list[Dict[st
         for display_name, format_key in _BINARY_FORMAT_GROUPS
     ]
     return text_formats, binary_formats
-
-
-def _build_deprecated_migration_data() -> tuple[list[str], Dict[str, str]]:
-    """Build deprecated tool list and migration guide from shared mapping data."""
-    deprecated_tools = [tool for tool, _, _ in _DEPRECATED_TOOL_TO_TARGET_FORMAT]
-    migration_guide = {
-        tool: f"{target_tool} or {target_tool}(format='{target_format}')"
-        for tool, target_tool, target_format in _DEPRECATED_TOOL_TO_TARGET_FORMAT
-    }
-    deprecated_tools.append("read_with_markitdown")
-    migration_guide["read_with_markitdown"] = "read_text_file or read_binary_file (auto-detects)"
-    return deprecated_tools, migration_guide
 
 
 def detect_format(file_path: str) -> Optional[str]:
@@ -225,7 +191,7 @@ async def process_pdf_document(
 ) -> Dict[str, Any]:
     """Process PDF document with enhanced features.
 
-    This is the standalone PDF processing logic extracted from the old read_pdf tool.
+    Handles PDF-specific features: text rendering, images, tables, forms, structure inspection.
     """
     start_time = time.time()
 
@@ -904,369 +870,6 @@ async def read_binary_file(
     )
 
 
-# ============================================
-# Deprecated tools - for backward compatibility
-# ============================================
-
-async def _forward_tool_fn(
-    tool: Any,
-    params: Dict[str, Any],
-    forced_format: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Forward deprecated tool calls to the target tool's raw function."""
-    forward_params = dict(params)
-    forward_params.pop("format", None)
-    if forced_format is not None:
-        forward_params["format"] = forced_format
-    return await tool.fn(**forward_params)
-
-
-@mcp.tool()
-async def read_pdf(
-    file_path: str,
-    format: Optional[str] = None,
-    # Standard pagination
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    # Standard structured extraction
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text",
-    # PDF-specific features (only used when format=pdf or auto-detected as pdf)
-    extract_images: Optional[bool] = False,
-    render_images: Optional[bool] = False,
-    render_dpi: Optional[int] = 200,
-    render_format: Optional[str] = "png",
-    extract_forms: Optional[bool] = False,
-    inspect_struct: Optional[bool] = False,
-    include_coords: Optional[bool] = False,
-    images_output_dir: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Deprecated: Use read_binary_file instead.
-
-    This is a backward compatibility alias for read_binary_file(format="pdf").
-    """
-    logger.warning("read_pdf is deprecated, use read_binary_file instead (or read_binary_file(format='pdf'))")
-    return await _forward_tool_fn(read_binary_file, locals(), forced_format="pdf")
-
-
-@mcp.tool()
-async def read_word(
-    file_path: str,
-    format: Optional[str] = None,
-    # Standard pagination
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    # Standard structured extraction
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text",
-    # PDF-specific features (ignored for Word)
-    extract_images: Optional[bool] = False,
-    render_images: Optional[bool] = False,
-    render_dpi: Optional[int] = 200,
-    render_format: Optional[str] = "png",
-    extract_forms: Optional[bool] = False,
-    inspect_struct: Optional[bool] = False,
-    include_coords: Optional[bool] = False,
-    images_output_dir: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Deprecated: Use read_binary_file instead.
-
-    This is a backward compatibility alias for read_binary_file(format="word").
-    """
-    logger.warning("read_word is deprecated, use read_binary_file instead (or read_binary_file(format='word'))")
-    return await _forward_tool_fn(read_binary_file, locals(), forced_format="word")
-
-
-@mcp.tool()
-async def read_excel(
-    file_path: str,
-    format: Optional[str] = None,
-    # Standard pagination
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    # Standard structured extraction
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text",
-    # PDF-specific features (ignored for Excel)
-    extract_images: Optional[bool] = False,
-    render_images: Optional[bool] = False,
-    render_dpi: Optional[int] = 200,
-    render_format: Optional[str] = "png",
-    extract_forms: Optional[bool] = False,
-    inspect_struct: Optional[bool] = False,
-    include_coords: Optional[bool] = False,
-    images_output_dir: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Deprecated: Use read_binary_file instead.
-
-    This is a backward compatibility alias for read_binary_file(format="excel").
-    """
-    logger.warning("read_excel is deprecated, use read_binary_file instead (or read_binary_file(format='excel'))")
-    return await _forward_tool_fn(read_binary_file, locals(), forced_format="excel")
-
-
-@mcp.tool()
-async def read_powerpoint(
-    file_path: str,
-    format: Optional[str] = None,
-    # Standard pagination
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    # Standard structured extraction
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text",
-    # PDF-specific features (ignored for PowerPoint)
-    extract_images: Optional[bool] = False,
-    render_images: Optional[bool] = False,
-    render_dpi: Optional[int] = 200,
-    render_format: Optional[str] = "png",
-    extract_forms: Optional[bool] = False,
-    inspect_struct: Optional[bool] = False,
-    include_coords: Optional[bool] = False,
-    images_output_dir: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Deprecated: Use read_binary_file instead.
-
-    This is a backward compatibility alias for read_binary_file(format="ppt").
-    """
-    logger.warning("read_powerpoint is deprecated, use read_binary_file instead (or read_binary_file(format='ppt'))")
-    return await _forward_tool_fn(read_binary_file, locals(), forced_format="ppt")
-
-
-@mcp.tool()
-async def read_html(
-    file_path: str,
-    format: Optional[str] = None,
-    # Standard pagination
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    # Standard structured extraction
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text",
-    # PDF-specific features (ignored for HTML)
-    extract_images: Optional[bool] = False,
-    render_images: Optional[bool] = False,
-    render_dpi: Optional[int] = 200,
-    render_format: Optional[str] = "png",
-    extract_forms: Optional[bool] = False,
-    inspect_struct: Optional[bool] = False,
-    include_coords: Optional[bool] = False,
-    images_output_dir: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Deprecated: Use read_binary_file instead.
-
-    This is a backward compatibility alias for read_binary_file(format="html").
-    """
-    logger.warning("read_html is deprecated, use read_binary_file instead (or read_binary_file(format='html'))")
-    return await _forward_tool_fn(read_binary_file, locals(), forced_format="html")
-
-
-@mcp.tool()
-async def read_text(
-    file_path: str,
-    format: Optional[str] = None,
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text"
-) -> Dict[str, Any]:
-    """Deprecated: Use read_text_file instead.
-
-    This is a backward compatibility alias for read_text_file(format="text").
-    """
-    logger.warning("read_text is deprecated, use read_text_file instead (or read_text_file(format='text'))")
-    return await _forward_tool_fn(read_text_file, locals(), forced_format="text")
-
-
-@mcp.tool()
-async def read_json(
-    file_path: str,
-    format: Optional[str] = None,
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text"
-) -> Dict[str, Any]:
-    """Deprecated: Use read_text_file instead.
-
-    This is a backward compatibility alias for read_text_file(format="json").
-    """
-    logger.warning("read_json is deprecated, use read_text_file instead (or read_text_file(format='json'))")
-    return await _forward_tool_fn(read_text_file, locals(), forced_format="json")
-
-
-@mcp.tool()
-async def read_csv(
-    file_path: str,
-    format: Optional[str] = None,
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text"
-) -> Dict[str, Any]:
-    """Deprecated: Use read_text_file instead.
-
-    This is a backward compatibility alias for read_text_file(format="csv").
-    """
-    logger.warning("read_csv is deprecated, use read_text_file instead (or read_text_file(format='csv'))")
-    return await _forward_tool_fn(read_text_file, locals(), forced_format="csv")
-
-
-@mcp.tool()
-async def read_yaml(
-    file_path: str,
-    format: Optional[str] = None,
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text"
-) -> Dict[str, Any]:
-    """Deprecated: Use read_text_file instead.
-
-    This is a backward compatibility alias for read_text_file(format="yaml").
-    """
-    logger.warning("read_yaml is deprecated, use read_text_file instead (or read_text_file(format='yaml'))")
-    return await _forward_tool_fn(read_text_file, locals(), forced_format="yaml")
-
-
-@mcp.tool()
-async def read_zip(
-    file_path: str,
-    format: Optional[str] = None,
-    # Standard pagination
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    # Standard structured extraction
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text",
-    # PDF-specific features (ignored for ZIP)
-    extract_images: Optional[bool] = False,
-    render_images: Optional[bool] = False,
-    render_dpi: Optional[int] = 200,
-    render_format: Optional[str] = "png",
-    extract_forms: Optional[bool] = False,
-    inspect_struct: Optional[bool] = False,
-    include_coords: Optional[bool] = False,
-    images_output_dir: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Deprecated: Use read_binary_file instead.
-
-    This is a backward compatibility alias for read_binary_file(format="zip").
-    """
-    logger.warning("read_zip is deprecated, use read_binary_file instead (or read_binary_file(format='zip'))")
-    return await _forward_tool_fn(read_binary_file, locals(), forced_format="zip")
-
-
-@mcp.tool()
-async def read_with_markitdown(
-    file_path: str,
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text"
-) -> Dict[str, Any]:
-    """Deprecated: Use read_text_file or read_binary_file instead.
-
-    This is a backward compatibility alias that uses markitdown fallback.
-    """
-    logger.warning("read_with_markitdown is deprecated, use read_text_file or read_binary_file instead")
-    forward_params = {
-        "file_path": file_path,
-        "chunk": chunk,
-        "chunk_size": chunk_size,
-        "offset": offset,
-        "limit": limit,
-        "extract_sections": extract_sections,
-        "extract_tables": extract_tables,
-        "extract_metadata": extract_metadata,
-        "preview_only": preview_only,
-        "preview_lines": preview_lines,
-        "session_id": session_id,
-        "return_format": return_format,
-    }
-    # Try to detect and use appropriate tool
-    ext = os.path.splitext(file_path)[1].lower()
-    if _is_text_like_extension(ext):
-        return await _forward_tool_fn(read_text_file, forward_params)
-    else:
-        return await _forward_tool_fn(read_binary_file, forward_params)
 
 
 @mcp.tool()
@@ -1277,13 +880,11 @@ async def get_supported_formats() -> Dict[str, Any]:
         Dictionary with format categories and extensions.
     """
     text_formats, binary_formats = _build_supported_format_groups()
-    deprecated_tools, migration_guide = _build_deprecated_migration_data()
     return {
         "text_formats": text_formats,
         "binary_formats": binary_formats,
         "tools": {
             "main": ["read_text_file", "read_binary_file"],
-            "deprecated": deprecated_tools,
             "auxiliary": ["analyze_image", "get_vision_status", "cleanup_temp_files"]
         },
         "notes": [
@@ -1291,10 +892,7 @@ async def get_supported_formats() -> Dict[str, Any]:
             "Use read_binary_file for binary/document formats",
             "File format is auto-detected by extension",
             "Explicit format parameter can override auto-detection",
-            "Old tools are still available but deprecated",
-            "Deprecated tools will show warnings and forward to new tools"
-        ],
-        "migration_guide": migration_guide
+        ]
     }
 
 
