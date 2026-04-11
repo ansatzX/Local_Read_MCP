@@ -27,6 +27,10 @@ from .converters import (
     fix_latex_formulas,
     html_to_markdown_result,
 )
+from .output_manager import OutputManager
+from .intermediate_json import IntermediateJSONBuilder
+from .index_generator import IndexGenerator
+from .markdown_converter import MarkdownConverter
 
 __version__ = "0.1.0"
 __all__ = [
@@ -59,4 +63,16 @@ __all__ = [
     "extract_sections_from_markdown",
     "fix_latex_formulas",
     "html_to_markdown_result",
+
+    # Output Manager
+    "OutputManager",
+
+    # Intermediate JSON
+    "IntermediateJSONBuilder",
+
+    # Index Generator
+    "IndexGenerator",
+
+    # Markdown Converter
+    "MarkdownConverter",
 ]

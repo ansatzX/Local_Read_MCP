@@ -16,7 +16,8 @@ from .utils import apply_content_limit
 def XlsxConverter(
     local_path: str,
     extract_metadata: bool = False,
-    extract_tables: bool = False
+    extract_tables: bool = False,
+    **kwargs
 ) -> DocumentConverterResult:
     """
     Converts Excel files to Markdown using openpyxl with enhanced features.

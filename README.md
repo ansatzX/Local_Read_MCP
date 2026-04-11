@@ -5,6 +5,7 @@ Model Context Protocol server for local document processing with vision support.
 ## Features
 
 - **Consolidated Tools**: Two main tools: `read_text_file` and `read_binary_file`
+- **New File Processing Tools**: `process_text_file` and `process_binary_file` that save results to files
 - **Local Processing**: No cloud services required for document conversion
 - **Multi-format Support**: PDF, Word, Excel, PowerPoint, HTML, Text, JSON, CSV, YAML, ZIP
 - **Enhanced PDF Features**: Rendering, table extraction, form handling, metadata inspection, coordinate-aware text extraction
@@ -13,8 +14,15 @@ Model Context Protocol server for local document processing with vision support.
 - **MCP Integration**: Seamless with Claude Code and other MCP clients
 - **Vision Analysis**: Analyze images using OpenAI-compatible APIs (Doubao, GPT-4o, etc.)
 - **Stability Improvements**: Deprecated tool forwarding and supported-format metadata are generated from centralized mappings
+- **Content Index Generation**: Automatic index creation for sections, tables, figures, formulas, and pages
+- **Command Line Interface**: `local-read-mcp` CLI tool for document conversion
+- **Structured Output Pipeline**: Intermediate JSON format for flexible document processing
+- **Format-aware Backend Selection**: Automatically selects the best backend based on file format and availability
+- **MinerU Integration**: Optional high-quality PDF parsing with layout analysis, formula recognition, and table recognition
 
 ## Quick Start
+
+### Installation
 
 ```bash
 git clone https://github.com/ansatzX/Local_Read_MCP.git
@@ -30,7 +38,32 @@ uv pip install -e .
 # PDF features are now included by default in base dependencies.
 # `.[pdf]` is kept only for backward compatibility and is equivalent.
 uv pip install -e ".[pdf]"
+
+# Optional: Install MinerU for high-quality PDF parsing (requires model download)
+uv pip install -e ".[mineru]"
+# See docs/backends.md for model download instructions
 ```
+
+### CLI Usage
+
+```bash
+# Convert a document
+local-read-mcp document.pdf
+
+# Convert with verbose output and custom output directory
+local-read-mcp -v -o ./output report.docx
+
+# Convert without page breaks
+local-read-mcp --no-page-breaks presentation.pptx
+
+# Show help
+local-read-mcp --help
+
+# Show version
+local-read-mcp --version
+```
+
+### Server Usage
 
 ## Configuration
 
@@ -85,6 +118,8 @@ Restart Claude Code to load the server.
 | ------------------------ | --------------------------------- | ------------ |
 | `read_text_file`         | Read text-based files            | **Main**     |
 | `read_binary_file`       | Read binary/document files        | **Main**     |
+| `process_text_file`      | Process text files & save to disk| **New**      |
+| `process_binary_file`    | Process binary files & save to disk| **New**    |
 | `analyze_image`          | Analyze images with vision API  | Auxiliary    |
 | `get_vision_status`      | Check vision configuration       | Auxiliary    |
 | `cleanup_temp_files`     | Clean up temporary files         | Auxiliary    |
@@ -251,6 +286,38 @@ cleanup_temp_files(custom_directory="/path/to/your/dir")
 - `read_binary_file(render_images=True)` - PDF page rendering
 - `read_binary_file(format="zip")` - ZIP extraction
 
+### File Processing Tools (Save to Disk)
+
+These tools process files and save the results to an output directory, including:
+- `intermediate.json` - Structured document representation
+- `output.md` - Markdown conversion
+- `index.json` - Content index (sections, tables, figures, formulas, pages)
+- `images/` - Extracted images (when applicable)
+
+```python
+# Process text file and save results
+process_text_file("/path/to/document.md")
+
+# Process with custom output directory
+process_text_file("/path/to/data.json", output_dir="/path/to/output")
+
+# Process binary/document file
+process_binary_file("/path/to/document.pdf")
+
+# Process PDF with image extraction
+process_binary_file("/path/to/photos.pdf", extract_images=True)
+```
+
+**Output directory structure:**
+```
+.local_read_mcp/
+└── filename_YYYYMMDD_HHMMSS/
+    ├── intermediate.json  # Intermediate JSON format
+    ├── output.md          # Markdown conversion
+    ├── index.json         # Content index
+    └── images/            # Extracted images (if applicable)
+```
+
 ## Development
 
 ```bash
@@ -266,6 +333,9 @@ uv run ruff format .
 # Lint code
 uv run ruff check .
 
+# Fix lint issues automatically
+uv run ruff check --fix .
+
 # Run hotpath benchmark
 uv run python scripts/benchmark_server_hotpaths.py --iterations 200000 --repeats 7
 ```
@@ -277,7 +347,7 @@ uv run python scripts/benchmark_server_hotpaths.py --iterations 200000 --repeats
 
 ### Test Status
 
-- Latest local run: `68 passed` (`uv run pytest -q`)
+- Latest local run: `109 passed` (`uv run pytest -q`)
 
 ## License
 

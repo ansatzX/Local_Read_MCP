@@ -11,31 +11,39 @@ Converts documents to markdown/text without requiring external APIs.
 import logging
 import os
 import time
-from typing import Dict, Any, Optional, Callable
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
 from fastmcp import FastMCP
 
+from ..backends import BackendType, get_registry
+from ..config import get_config as _get_config
 from ..converters import (
-    PdfConverter,
-    DocxConverter,
-    XlsxConverter,
-    PptxConverter,
-    HtmlConverter,
-    TextConverter,
-    JsonConverter,
     CsvConverter,
+    DocxConverter,
+    HtmlConverter,
+    JsonConverter,
+    MarkItDownConverter,
+    PdfConverter,
+    PptxConverter,
+    TextConverter,
+    XlsxConverter,
     YamlConverter,
     ZipConverter,
-    MarkItDownConverter,
     extract_sections_from_markdown,
     generate_session_id,
 )
-from .vision import call_vision_api
+from ..index_generator import IndexGenerator
+from ..markdown_converter import MarkdownConverter
+from ..output_manager import OutputManager
 from .utils import (
     apply_pagination,
-    fix_tool_arguments,
-    duplicate_detector,
     create_simple_converter_wrapper,
+    duplicate_detector,
+    fix_tool_arguments,
 )
+from .vision import call_vision_api
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +51,6 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("local_read_mcp-server")
 
 # Initialize config to check if vision features should be enabled
-from ..config import get_config as _get_config
 _config = _get_config()
 VISION_ENABLED = _config.vision_enabled
 
@@ -53,7 +60,7 @@ else:
     logger.info("Vision features DISABLED - configure VISION_API_KEY or OPENAI_API_KEY in .env file to enable")
 
 
-_SIMPLE_CONVERTER_BUILDERS: Dict[str, tuple[Callable[..., Any], str]] = {
+_SIMPLE_CONVERTER_BUILDERS: dict[str, tuple[Callable[..., Any], str]] = {
     "text": (TextConverter, "text"),
     "json": (JsonConverter, "json"),
     "csv": (CsvConverter, "csv"),
@@ -62,9 +69,9 @@ _SIMPLE_CONVERTER_BUILDERS: Dict[str, tuple[Callable[..., Any], str]] = {
     "zip": (ZipConverter, "zip"),
     "markitdown": (MarkItDownConverter, "markitdown"),
 }
-_SIMPLE_CONVERTER_CACHE: Dict[str, Callable[..., Any]] = {}
+_SIMPLE_CONVERTER_CACHE: dict[str, Callable[..., Any]] = {}
 
-_FORMAT_BY_EXTENSION: Dict[str, str] = {
+_FORMAT_BY_EXTENSION: dict[str, str] = {
     # Text formats
     ".txt": "text",
     ".md": "text",
@@ -116,8 +123,8 @@ def get_simple_converter_wrapper(format_name: str) -> Callable[..., Any]:
 
 def _extract_common_read_params(
     tool_name: str,
-    params: Dict[str, Any],
-) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    params: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Extract shared read_* parameters after applying argument auto-fixes."""
     fixed_params = fix_tool_arguments(tool_name, params)
     common_params = {
@@ -143,7 +150,7 @@ def _extensions_for_format(format_key: str) -> list[str]:
     return [ext for ext, mapped_format in _FORMAT_BY_EXTENSION.items() if mapped_format == format_key]
 
 
-def _build_supported_format_groups() -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
+def _build_supported_format_groups() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build supported format groups from shared extension mapping constants."""
     text_formats = [
         {"name": display_name, "extensions": _extensions_for_format(format_key)}
@@ -156,7 +163,7 @@ def _build_supported_format_groups() -> tuple[list[Dict[str, Any]], list[Dict[st
     return text_formats, binary_formats
 
 
-def detect_format(file_path: str) -> Optional[str]:
+def detect_format(file_path: str) -> str | None:
     """Detect file format from extension.
 
     Returns:
@@ -169,26 +176,26 @@ def detect_format(file_path: str) -> Optional[str]:
 
 async def process_pdf_document(
     file_path: str,
-    chunk: Optional[int],
-    chunk_size: Optional[int],
-    offset: Optional[int],
-    limit: Optional[int],
-    extract_sections: Optional[bool],
-    extract_tables: Optional[bool],
-    extract_metadata: Optional[bool],
-    extract_images: Optional[bool],
-    render_images: Optional[bool],
-    render_dpi: Optional[int],
-    render_format: Optional[str],
-    extract_forms: Optional[bool],
-    inspect_struct: Optional[bool],
-    include_coords: Optional[bool],
-    images_output_dir: Optional[str],
-    preview_only: Optional[bool],
-    preview_lines: Optional[int],
-    session_id: Optional[str],
-    return_format: Optional[str],
-) -> Dict[str, Any]:
+    chunk: int | None,
+    chunk_size: int | None,
+    offset: int | None,
+    limit: int | None,
+    extract_sections: bool | None,
+    extract_tables: bool | None,
+    extract_metadata: bool | None,
+    extract_images: bool | None,
+    render_images: bool | None,
+    render_dpi: int | None,
+    render_format: str | None,
+    extract_forms: bool | None,
+    inspect_struct: bool | None,
+    include_coords: bool | None,
+    images_output_dir: str | None,
+    preview_only: bool | None,
+    preview_lines: int | None,
+    session_id: str | None,
+    return_format: str | None,
+) -> dict[str, Any]:
     """Process PDF document with enhanced features.
 
     Handles PDF-specific features: text rendering, images, tables, forms, structure inspection.
@@ -353,14 +360,14 @@ async def process_pdf_document(
             return {
                 "success": False,
                 "error": str(e),
-                "content": f"Error: Failed to read PDF file: {str(e)}",
+                "content": f"Error: Failed to read PDF file: {e!s}",
                 "processing_time_ms": processing_time_ms,
             }
         else:
             return {
                 "success": False,
                 "error": str(e),
-                "content": f"Error: Failed to read PDF file: {str(e)}",
+                "content": f"Error: Failed to read PDF file: {e!s}",
             }
 
 
@@ -368,7 +375,7 @@ async def process_pdf_document(
 async def analyze_image(
     image_path: str,
     question: str = "Describe this image in detail. What type of content is it?",
-    api_key: Optional[str] = None
+    api_key: str | None = None
 ) -> str:
     """Analyze an image using OpenAI-compatible vision API.
 
@@ -413,7 +420,7 @@ async def analyze_image(
 
 
 @mcp.tool()
-async def get_vision_status() -> Dict[str, Any]:
+async def get_vision_status() -> dict[str, Any]:
     """Get vision server status and configuration.
 
     Returns:
@@ -438,19 +445,19 @@ async def get_vision_status() -> Dict[str, Any]:
 async def process_document(
     file_path: str,
     converter_func,
-    converter_kwargs: Dict[str, Any],
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text"
-) -> Dict[str, Any]:
+    converter_kwargs: dict[str, Any],
+    chunk: int | None = 1,
+    chunk_size: int | None = 10000,
+    offset: int | None = None,
+    limit: int | None = None,
+    extract_sections: bool | None = False,
+    extract_tables: bool | None = False,
+    extract_metadata: bool | None = False,
+    preview_only: bool | None = False,
+    preview_lines: int | None = 100,
+    session_id: str | None = None,
+    return_format: str | None = "text"
+) -> dict[str, Any]:
     """
     Unified document processing with chunked pagination, session management, and structured extraction.
 
@@ -604,33 +611,33 @@ async def process_document(
             return {
                 "success": False,
                 "error": str(e),
-                "content": f"Error: Failed to process file: {str(e)}",
+                "content": f"Error: Failed to process file: {e!s}",
                 "processing_time_ms": processing_time_ms,
             }
         else:
             return {
                 "success": False,
                 "error": str(e),
-                "content": f"Error: Failed to process file: {str(e)}",
+                "content": f"Error: Failed to process file: {e!s}",
             }
 
 
 @mcp.tool()
 async def read_text_file(
     file_path: str,
-    format: Optional[str] = None,
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text"
-) -> Dict[str, Any]:
+    format: str | None = None,
+    chunk: int | None = 1,
+    chunk_size: int | None = 10000,
+    offset: int | None = None,
+    limit: int | None = None,
+    extract_sections: bool | None = False,
+    extract_tables: bool | None = False,
+    extract_metadata: bool | None = False,
+    preview_only: bool | None = False,
+    preview_lines: int | None = 100,
+    session_id: str | None = None,
+    return_format: str | None = "text"
+) -> dict[str, Any]:
     """Read text-based files.
 
     Supported formats: .txt, .md, .py, .sh, .json, .csv, .yaml, .yml
@@ -708,30 +715,32 @@ async def read_text_file(
 @mcp.tool()
 async def read_binary_file(
     file_path: str,
-    format: Optional[str] = None,
+    format: str | None = None,
     # Standard pagination
-    chunk: Optional[int] = 1,
-    chunk_size: Optional[int] = 10000,
-    offset: Optional[int] = None,
-    limit: Optional[int] = None,
+    chunk: int | None = 1,
+    chunk_size: int | None = 10000,
+    offset: int | None = None,
+    limit: int | None = None,
     # Standard structured extraction
-    extract_sections: Optional[bool] = False,
-    extract_tables: Optional[bool] = False,
-    extract_metadata: Optional[bool] = False,
-    preview_only: Optional[bool] = False,
-    preview_lines: Optional[int] = 100,
-    session_id: Optional[str] = None,
-    return_format: Optional[str] = "text",
+    extract_sections: bool | None = False,
+    extract_tables: bool | None = False,
+    extract_metadata: bool | None = False,
+    preview_only: bool | None = False,
+    preview_lines: int | None = 100,
+    session_id: str | None = None,
+    return_format: str | None = "text",
     # PDF-specific features (only used when format=pdf or auto-detected as pdf)
-    extract_images: Optional[bool] = None,
-    render_images: Optional[bool] = False,
-    render_dpi: Optional[int] = 200,
-    render_format: Optional[str] = "png",
-    extract_forms: Optional[bool] = False,
-    inspect_struct: Optional[bool] = False,
-    include_coords: Optional[bool] = False,
-    images_output_dir: Optional[str] = None,
-) -> Dict[str, Any]:
+    extract_images: bool | None = None,
+    render_images: bool | None = False,
+    render_dpi: int | None = 200,
+    render_format: str | None = "png",
+    extract_forms: bool | None = False,
+    inspect_struct: bool | None = False,
+    include_coords: bool | None = False,
+    images_output_dir: str | None = None,
+    # Backend selection (experimental)
+    backend: str | None = None,
+) -> dict[str, Any]:
     """Read binary/document files.
 
     Supported formats: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .html, .htm, .zip
@@ -766,6 +775,7 @@ async def read_binary_file(
         inspect_struct: Get complete PDF structure (metadata, outline, fonts, etc.). Default: False.
         include_coords: Include text with bounding box coordinates. Default: False.
         images_output_dir: Directory to save extracted/rendered images. If None, uses temporary directory. Default: None.
+        backend: Backend to use (auto, simple, mineru, qwen-vl, openai-vlm). Experimental feature. Default: None (use original processing logic).
 
     Returns:
         A dictionary containing the text content or error message.
@@ -805,6 +815,95 @@ async def read_binary_file(
     # Auto-detect format if not provided
     if not format:
         format = detect_format(file_path)
+
+    # Experimental: Use backend if specified
+    if backend:
+        try:
+            from ..backends import BackendType, get_registry
+            from ..converters.base import DocumentConverterResult
+            from ..index_generator import IndexGenerator
+            from ..markdown_converter import MarkdownConverter
+
+            registry = get_registry()
+
+            # Parse backend type
+            try:
+                backend_type = BackendType(backend)
+            except ValueError:
+                backend_type = BackendType.AUTO
+
+            # Select backend
+            if backend_type == BackendType.AUTO:
+                backend_instance = registry.select_best(format)
+            else:
+                backend_instance = registry.get(backend_type)
+
+            if backend_instance is None:
+                backend_instance = registry.get(BackendType.SIMPLE)
+
+            # Validate that the selected backend supports the format
+            if not backend_instance.supports_format(format):
+                raise ValueError(f"Backend '{backend_instance.name}' does not support format '{format}'")
+
+            warnings = []
+            if backend_instance.warning:
+                warnings.append(backend_instance.warning)
+
+            # Process with backend
+            file_path_obj = Path(file_path)
+            intermediate = backend_instance.process(
+                file_path_obj,
+                format,
+                extract_images=extract_images,
+                images_output_dir=images_output_dir
+            )
+
+            # Convert intermediate to markdown
+            markdown_converter = MarkdownConverter(intermediate)
+            full_content = markdown_converter.convert()
+
+            # Get sections and tables from index
+            index_generator = IndexGenerator(intermediate)
+            index_data = index_generator.generate()
+
+            # Create a wrapper converter function for process_document
+            def backend_converter(fp: str, **kwargs):
+                return DocumentConverterResult(
+                    title=intermediate.get("metadata", {}).get("title"),
+                    text_content=full_content,
+                    metadata=intermediate.get("source", {}),
+                    sections=index_data.get("sections", []),
+                    tables=index_data.get("tables", [])
+                )
+
+            # Delegate to process_document
+            result = await process_document(
+                file_path=file_path,
+                converter_func=backend_converter,
+                converter_kwargs={},
+                chunk=chunk,
+                chunk_size=chunk_size,
+                offset=offset,
+                limit=limit,
+                extract_sections=extract_sections,
+                extract_tables=extract_tables,
+                extract_metadata=extract_metadata,
+                preview_only=preview_only,
+                preview_lines=preview_lines,
+                session_id=session_id,
+                return_format=return_format
+            )
+
+            # Add backend info to the result
+            if result.get("success"):
+                result["backend_used"] = backend_instance.name
+                if warnings:
+                    result["warnings"] = warnings
+
+            return result
+
+        except Exception as e:
+            logger.warning(f"Backend processing failed: {e}, falling back to original logic")
 
     # Special case: PDF has its own implementation
     if format == "pdf":
@@ -873,7 +972,7 @@ async def read_binary_file(
 
 
 @mcp.tool()
-async def get_supported_formats() -> Dict[str, Any]:
+async def get_supported_formats() -> dict[str, Any]:
     """List all supported file formats.
 
     Returns:
@@ -885,11 +984,12 @@ async def get_supported_formats() -> Dict[str, Any]:
         "binary_formats": binary_formats,
         "tools": {
             "main": ["read_text_file", "read_binary_file"],
+            "new": ["process_text_file", "process_binary_file"],
             "auxiliary": ["analyze_image", "get_vision_status", "cleanup_temp_files"]
         },
         "notes": [
-            "Use read_text_file for text-based formats",
-            "Use read_binary_file for binary/document formats",
+            "Use read_text_file/read_binary_file for direct content access",
+            "Use process_text_file/process_binary_file to save results to files",
             "File format is auto-detected by extension",
             "Explicit format parameter can override auto-detection",
         ]
@@ -898,12 +998,12 @@ async def get_supported_formats() -> Dict[str, Any]:
 
 @mcp.tool()
 async def cleanup_temp_files(
-    older_than_hours: Optional[int] = 24,
-    dry_run: Optional[bool] = False,
-    cleanup_pdf_images: Optional[bool] = True,
-    cleanup_zip_extracts: Optional[bool] = True,
-    custom_directory: Optional[str] = None
-) -> Dict[str, Any]:
+    older_than_hours: int | None = 24,
+    dry_run: bool | None = False,
+    cleanup_pdf_images: bool | None = True,
+    cleanup_zip_extracts: bool | None = True,
+    custom_directory: str | None = None
+) -> dict[str, Any]:
     """Clean up temporary files created by Local Read MCP tools.
 
     Use this tool after completing your tasks and confirming no further need for temporary files.
@@ -1020,6 +1120,199 @@ async def cleanup_temp_files(
         result["message"] = f"Cleaned up {deleted_files} files and {deleted_dirs} directories"
 
     return result
+
+
+@mcp.tool()
+async def process_text_file(
+    file_path: str,
+    format: str | None = None,
+    output_dir: str | None = None,
+    backend: str = "auto"
+) -> dict[str, Any]:
+    """Process text-based files and save results to output directory.
+
+    Supported formats: .txt, .md, .py, .sh, .json, .csv, .yaml, .yml
+
+    Args:
+        file_path: Path to the file to read
+        format: Explicit format override (text/json/csv/yaml)
+        output_dir: Directory to save output files (defaults to .local_read_mcp in current directory)
+        backend: Backend to use (auto, simple)
+
+    Returns:
+        Dictionary with paths to generated files
+    """
+    # Detect format if not specified
+    if format is None:
+        format = detect_format(file_path) or "text"
+
+    # Get backend
+    registry = get_registry()
+
+    # Parse backend type
+    try:
+        backend_type = BackendType(backend)
+    except ValueError:
+        backend_type = BackendType.AUTO
+
+    # Select backend
+    if backend_type == BackendType.AUTO:
+        backend_instance = registry.select_best(format)
+    else:
+        backend_instance = registry.get(backend_type)
+
+    if backend_instance is None:
+        backend_instance = registry.get(BackendType.SIMPLE)
+
+    # Validate that the selected backend supports the format
+    if not backend_instance.supports_format(format):
+        raise ValueError(f"Backend '{backend_instance.name}' does not support format '{format}'")
+
+    warnings = []
+    if backend_instance.warning:
+        warnings.append(backend_instance.warning)
+
+    # Create output directory
+    output_manager = OutputManager(base_dir=Path(output_dir) if output_dir else None)
+    output_path = output_manager.create_output_dir(file_path)
+
+    # Process with backend
+    file_path_obj = Path(file_path)
+    intermediate = backend_instance.process(file_path_obj, format)
+
+    # Save intermediate JSON
+    intermediate_path = output_manager.get_output_path(output_path, "intermediate.json")
+    import json
+    with open(intermediate_path, 'w', encoding='utf-8') as f:
+        json.dump(intermediate, f, ensure_ascii=False, indent=2)
+
+    # Convert to markdown
+    markdown_converter = MarkdownConverter(intermediate)
+    markdown_content = markdown_converter.convert()
+    markdown_path = output_manager.get_output_path(output_path, "output.md")
+    with open(markdown_path, 'w', encoding='utf-8') as f:
+        f.write(markdown_content)
+
+    # Save index
+    index_generator = IndexGenerator(intermediate)
+    index_path = output_manager.get_output_path(output_path, "index.json")
+    index_generator.save_to_file(str(index_path))
+
+    return {
+        "success": True,
+        "output_directory": str(output_path),
+        "backend_used": backend_instance.name,
+        "warnings": warnings,
+        "files": {
+            "intermediate_json": str(intermediate_path),
+            "markdown": str(markdown_path),
+            "index_json": str(index_path)
+        }
+    }
+
+
+@mcp.tool()
+async def process_binary_file(
+    file_path: str,
+    format: str | None = None,
+    output_dir: str | None = None,
+    extract_images: bool | None = None,
+    backend: str = "auto"
+) -> dict[str, Any]:
+    """Process binary/document files and save results to output directory.
+
+    Supported formats: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .html, .htm, .zip
+
+    Args:
+        file_path: Path to the file to read
+        format: Explicit format override
+        output_dir: Directory to save output files (defaults to .local_read_mcp in current directory)
+        extract_images: Extract images from PDF (auto-enabled if vision is configured)
+        backend: Backend to use (auto, simple)
+
+    Returns:
+        Dictionary with paths to generated files
+    """
+    # Detect format if not specified
+    if format is None:
+        format = detect_format(file_path) or "pdf"
+
+    # Map format to backend format names
+    format_mapping = {
+        "pdf": "pdf",
+        "word": "word",
+        "excel": "excel",
+        "ppt": "ppt",
+        "html": "html",
+        "zip": "zip"
+    }
+    backend_format = format_mapping.get(format, format)
+
+    # Get backend
+    registry = get_registry()
+
+    # Parse backend type
+    try:
+        backend_type = BackendType(backend)
+    except ValueError:
+        backend_type = BackendType.AUTO
+
+    # Select backend
+    if backend_type == BackendType.AUTO:
+        backend_instance = registry.select_best(backend_format)
+    else:
+        backend_instance = registry.get(backend_type)
+
+    if backend_instance is None:
+        backend_instance = registry.get(BackendType.SIMPLE)
+
+    # Validate that the selected backend supports the format
+    if not backend_instance.supports_format(backend_format):
+        raise ValueError(f"Backend '{backend_instance.name}' does not support format '{backend_format}'")
+
+    warnings = []
+    if backend_instance.warning:
+        warnings.append(backend_instance.warning)
+
+    # Create output directory
+    output_manager = OutputManager(base_dir=Path(output_dir) if output_dir else None)
+    output_path = output_manager.create_output_dir(file_path)
+    images_dir = output_path / "images"
+
+    # Process with backend
+    file_path_obj = Path(file_path)
+    intermediate = backend_instance.process(file_path_obj, backend_format, extract_images=extract_images, images_output_dir=str(images_dir))
+
+    # Save intermediate JSON
+    intermediate_path = output_manager.get_output_path(output_path, "intermediate.json")
+    import json
+    with open(intermediate_path, 'w', encoding='utf-8') as f:
+        json.dump(intermediate, f, ensure_ascii=False, indent=2)
+
+    # Convert to markdown
+    markdown_converter = MarkdownConverter(intermediate)
+    markdown_content = markdown_converter.convert()
+    markdown_path = output_manager.get_output_path(output_path, "output.md")
+    with open(markdown_path, 'w', encoding='utf-8') as f:
+        f.write(markdown_content)
+
+    # Save index
+    index_generator = IndexGenerator(intermediate)
+    index_path = output_manager.get_output_path(output_path, "index.json")
+    index_generator.save_to_file(str(index_path))
+
+    return {
+        "success": True,
+        "output_directory": str(output_path),
+        "backend_used": backend_instance.name,
+        "warnings": warnings,
+        "files": {
+            "intermediate_json": str(intermediate_path),
+            "markdown": str(markdown_path),
+            "index_json": str(index_path),
+            "images": str(images_dir) if extract_images and images_dir.exists() else None
+        }
+    }
 
 
 def main():
