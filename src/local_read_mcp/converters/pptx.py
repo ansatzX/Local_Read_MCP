@@ -10,7 +10,7 @@ from .utils import apply_content_limit
 from .html import convert_html_to_md
 
 
-def PptxConverter(local_path: str) -> DocumentConverterResult:
+def PptxConverter(local_path: str, **kwargs) -> DocumentConverterResult:
     """
     Converts PPTX files to Markdown. Supports headings, tables and images with alt text.
 

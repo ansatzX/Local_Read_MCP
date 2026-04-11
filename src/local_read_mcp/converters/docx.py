@@ -11,7 +11,8 @@ def DocxConverter(
     local_path: str,
     extract_metadata: bool = False,
     extract_sections: bool = False,
-    extract_tables: bool = False
+    extract_tables: bool = False,
+    **kwargs
 ) -> DocumentConverterResult:
     """
     Convert a DOCX file to Markdown format with enhanced features.

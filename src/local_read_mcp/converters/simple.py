@@ -9,12 +9,13 @@ from .base import (
 )
 
 
-def TextConverter(local_path: str) -> DocumentConverterResult:
+def TextConverter(local_path: str, **kwargs) -> DocumentConverterResult:
     """
     Read a text file.
 
     Args:
         local_path: Path to text file to read.
+        **kwargs: Additional keyword arguments (ignored)
 
     Returns:
         DocumentConverterResult containing text content.
@@ -24,12 +25,13 @@ def TextConverter(local_path: str) -> DocumentConverterResult:
     return DocumentConverterResult(title=None, text_content=text_content)
 
 
-def JsonConverter(local_path: str) -> DocumentConverterResult:
+def JsonConverter(local_path: str, **kwargs) -> DocumentConverterResult:
     """
     Read and format a JSON file.
 
     Args:
         local_path: Path to JSON file to read.
+        **kwargs: Additional keyword arguments (ignored)
 
     Returns:
         DocumentConverterResult containing formatted JSON.
@@ -41,12 +43,13 @@ def JsonConverter(local_path: str) -> DocumentConverterResult:
     return DocumentConverterResult(title=None, text_content=text_content)
 
 
-def YamlConverter(local_path: str) -> DocumentConverterResult:
+def YamlConverter(local_path: str, **kwargs) -> DocumentConverterResult:
     """
     Read a YAML file.
 
     Args:
         local_path: Path to YAML file to read.
+        **kwargs: Additional keyword arguments (ignored)
 
     Returns:
         DocumentConverterResult containing YAML content.
@@ -63,12 +66,13 @@ def YamlConverter(local_path: str) -> DocumentConverterResult:
     return DocumentConverterResult(title=None, text_content=text_content)
 
 
-def CsvConverter(local_path: str) -> DocumentConverterResult:
+def CsvConverter(local_path: str, **kwargs) -> DocumentConverterResult:
     """
     Convert a CSV file to markdown table format.
 
     Args:
         local_path: Path to CSV file to convert.
+        **kwargs: Additional keyword arguments (ignored)
 
     Returns:
         DocumentConverterResult containing markdown table.
@@ -89,12 +93,13 @@ def CsvConverter(local_path: str) -> DocumentConverterResult:
     return DocumentConverterResult(title=None, text_content=md_content)
 
 
-def MarkItDownConverter(local_path: str) -> DocumentConverterResult:
+def MarkItDownConverter(local_path: str, **kwargs) -> DocumentConverterResult:
     """
     Convert a file using MarkItDown library (universal converter).
 
     Args:
         local_path: Path to file to convert.
+        **kwargs: Additional keyword arguments (ignored)
 
     Returns:
         DocumentConverterResult containing converted markdown.
