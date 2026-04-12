@@ -636,7 +636,9 @@ async def read_text_file(
     preview_only: bool | None = False,
     preview_lines: int | None = 100,
     session_id: str | None = None,
-    return_format: str | None = "text"
+    return_format: str | None = "text",
+    # Backend selection
+    backend: str = "auto",
 ) -> dict[str, Any]:
     """Read text-based files.
 
@@ -656,6 +658,7 @@ async def read_text_file(
         preview_lines: Number of lines for preview mode. Default: 100.
         session_id: Session ID for resuming pagination. Reuse for consecutive chunk requests.
         return_format: Output format: 'json' (structured with metadata/sections) or 'text' (plain). Default: 'text'.
+        backend: Backend to use (auto, simple). Default: auto.
 
     Returns:
         A dictionary containing the text content or error message.
@@ -681,6 +684,90 @@ async def read_text_file(
     if not format:
         format = detect_format(file_path)
 
+    # Use backend path
+    try:
+        from ..backends import BackendType, get_registry
+        from ..converters.base import DocumentConverterResult
+        from ..index_generator import IndexGenerator
+        from ..markdown_converter import MarkdownConverter
+
+        registry = get_registry()
+
+        # Parse backend type
+        try:
+            backend_type = BackendType(backend)
+        except ValueError:
+            backend_type = BackendType.AUTO
+
+        # Select backend
+        if backend_type == BackendType.AUTO:
+            backend_instance = registry.select_best(format)
+        else:
+            backend_instance = registry.get(backend_type)
+
+        if backend_instance is None:
+            backend_instance = registry.get(BackendType.SIMPLE)
+
+        # Validate that the selected backend supports the format
+        if not backend_instance.supports_format(format):
+            raise ValueError(f"Backend '{backend_instance.name}' does not support format '{format}'")
+
+        warnings = []
+        if backend_instance.warning:
+            warnings.append(backend_instance.warning)
+
+        # Process with backend
+        file_path_obj = Path(file_path)
+        intermediate = backend_instance.process(file_path_obj, format)
+
+        # Convert intermediate to markdown
+        markdown_converter = MarkdownConverter(intermediate)
+        full_content = markdown_converter.convert()
+
+        # Get sections and tables from index
+        index_generator = IndexGenerator(intermediate)
+        index_data = index_generator.generate()
+
+        # Create a wrapper converter function for process_document
+        def backend_converter(fp: str, **kwargs):
+            return DocumentConverterResult(
+                title=intermediate.get("metadata", {}).get("title"),
+                text_content=full_content,
+                metadata=intermediate.get("source", {}),
+                sections=index_data.get("sections", []),
+                tables=index_data.get("tables", [])
+            )
+
+        # Delegate to process_document
+        result = await process_document(
+            file_path=file_path,
+            converter_func=backend_converter,
+            converter_kwargs={},
+            chunk=chunk,
+            chunk_size=chunk_size,
+            offset=offset,
+            limit=limit,
+            extract_sections=extract_sections,
+            extract_tables=extract_tables,
+            extract_metadata=extract_metadata,
+            preview_only=preview_only,
+            preview_lines=preview_lines,
+            session_id=session_id,
+            return_format=return_format
+        )
+
+        # Add backend info to the result
+        if result.get("success"):
+            result["backend_used"] = backend_instance.name
+            if warnings:
+                result["warnings"] = warnings
+
+        return result
+
+    except Exception as e:
+        logger.warning(f"Backend processing failed: {e}, falling back to original logic")
+
+    # Original logic as fallback
     # Map format to converter
     converter_kwargs = {
         "extract_metadata": extract_metadata,
@@ -738,8 +825,8 @@ async def read_binary_file(
     inspect_struct: bool | None = False,
     include_coords: bool | None = False,
     images_output_dir: str | None = None,
-    # Backend selection (experimental)
-    backend: str | None = None,
+    # Backend selection
+    backend: str = "auto",
 ) -> dict[str, Any]:
     """Read binary/document files.
 
@@ -775,7 +862,7 @@ async def read_binary_file(
         inspect_struct: Get complete PDF structure (metadata, outline, fonts, etc.). Default: False.
         include_coords: Include text with bounding box coordinates. Default: False.
         images_output_dir: Directory to save extracted/rendered images. If None, uses temporary directory. Default: None.
-        backend: Backend to use (auto, simple, mineru, qwen-vl, openai-vlm). Experimental feature. Default: None (use original processing logic).
+        backend: Backend to use (auto, simple, mineru, qwen-vl, openai-vlm). Default: auto.
 
     Returns:
         A dictionary containing the text content or error message.
@@ -816,94 +903,93 @@ async def read_binary_file(
     if not format:
         format = detect_format(file_path)
 
-    # Experimental: Use backend if specified
-    if backend:
+    # Use backend path (default)
+    try:
+        from ..backends import BackendType, get_registry
+        from ..converters.base import DocumentConverterResult
+        from ..index_generator import IndexGenerator
+        from ..markdown_converter import MarkdownConverter
+
+        registry = get_registry()
+
+        # Parse backend type
         try:
-            from ..backends import BackendType, get_registry
-            from ..converters.base import DocumentConverterResult
-            from ..index_generator import IndexGenerator
-            from ..markdown_converter import MarkdownConverter
+            backend_type = BackendType(backend)
+        except ValueError:
+            backend_type = BackendType.AUTO
 
-            registry = get_registry()
+        # Select backend
+        if backend_type == BackendType.AUTO:
+            backend_instance = registry.select_best(format)
+        else:
+            backend_instance = registry.get(backend_type)
 
-            # Parse backend type
-            try:
-                backend_type = BackendType(backend)
-            except ValueError:
-                backend_type = BackendType.AUTO
+        if backend_instance is None:
+            backend_instance = registry.get(BackendType.SIMPLE)
 
-            # Select backend
-            if backend_type == BackendType.AUTO:
-                backend_instance = registry.select_best(format)
-            else:
-                backend_instance = registry.get(backend_type)
+        # Validate that the selected backend supports the format
+        if not backend_instance.supports_format(format):
+            raise ValueError(f"Backend '{backend_instance.name}' does not support format '{format}'")
 
-            if backend_instance is None:
-                backend_instance = registry.get(BackendType.SIMPLE)
+        warnings = []
+        if backend_instance.warning:
+            warnings.append(backend_instance.warning)
 
-            # Validate that the selected backend supports the format
-            if not backend_instance.supports_format(format):
-                raise ValueError(f"Backend '{backend_instance.name}' does not support format '{format}'")
+        # Process with backend
+        file_path_obj = Path(file_path)
+        intermediate = backend_instance.process(
+            file_path_obj,
+            format,
+            extract_images=extract_images,
+            images_output_dir=images_output_dir
+        )
 
-            warnings = []
-            if backend_instance.warning:
-                warnings.append(backend_instance.warning)
+        # Convert intermediate to markdown
+        markdown_converter = MarkdownConverter(intermediate)
+        full_content = markdown_converter.convert()
 
-            # Process with backend
-            file_path_obj = Path(file_path)
-            intermediate = backend_instance.process(
-                file_path_obj,
-                format,
-                extract_images=extract_images,
-                images_output_dir=images_output_dir
+        # Get sections and tables from index
+        index_generator = IndexGenerator(intermediate)
+        index_data = index_generator.generate()
+
+        # Create a wrapper converter function for process_document
+        def backend_converter(fp: str, **kwargs):
+            return DocumentConverterResult(
+                title=intermediate.get("metadata", {}).get("title"),
+                text_content=full_content,
+                metadata=intermediate.get("source", {}),
+                sections=index_data.get("sections", []),
+                tables=index_data.get("tables", [])
             )
 
-            # Convert intermediate to markdown
-            markdown_converter = MarkdownConverter(intermediate)
-            full_content = markdown_converter.convert()
+        # Delegate to process_document
+        result = await process_document(
+            file_path=file_path,
+            converter_func=backend_converter,
+            converter_kwargs={},
+            chunk=chunk,
+            chunk_size=chunk_size,
+            offset=offset,
+            limit=limit,
+            extract_sections=extract_sections,
+            extract_tables=extract_tables,
+            extract_metadata=extract_metadata,
+            preview_only=preview_only,
+            preview_lines=preview_lines,
+            session_id=session_id,
+            return_format=return_format
+        )
 
-            # Get sections and tables from index
-            index_generator = IndexGenerator(intermediate)
-            index_data = index_generator.generate()
+        # Add backend info to the result
+        if result.get("success"):
+            result["backend_used"] = backend_instance.name
+            if warnings:
+                result["warnings"] = warnings
 
-            # Create a wrapper converter function for process_document
-            def backend_converter(fp: str, **kwargs):
-                return DocumentConverterResult(
-                    title=intermediate.get("metadata", {}).get("title"),
-                    text_content=full_content,
-                    metadata=intermediate.get("source", {}),
-                    sections=index_data.get("sections", []),
-                    tables=index_data.get("tables", [])
-                )
+        return result
 
-            # Delegate to process_document
-            result = await process_document(
-                file_path=file_path,
-                converter_func=backend_converter,
-                converter_kwargs={},
-                chunk=chunk,
-                chunk_size=chunk_size,
-                offset=offset,
-                limit=limit,
-                extract_sections=extract_sections,
-                extract_tables=extract_tables,
-                extract_metadata=extract_metadata,
-                preview_only=preview_only,
-                preview_lines=preview_lines,
-                session_id=session_id,
-                return_format=return_format
-            )
-
-            # Add backend info to the result
-            if result.get("success"):
-                result["backend_used"] = backend_instance.name
-                if warnings:
-                    result["warnings"] = warnings
-
-            return result
-
-        except Exception as e:
-            logger.warning(f"Backend processing failed: {e}, falling back to original logic")
+    except Exception as e:
+        logger.warning(f"Backend processing failed: {e}, falling back to original logic")
 
     # Special case: PDF has its own implementation
     if format == "pdf":
@@ -1172,43 +1258,52 @@ async def process_text_file(
     if backend_instance.warning:
         warnings.append(backend_instance.warning)
 
-    # Create output directory
-    output_manager = OutputManager(base_dir=Path(output_dir) if output_dir else None)
-    output_path = output_manager.create_output_dir(file_path)
+    try:
+        # Create output directory
+        output_manager = OutputManager(base_dir=Path(output_dir) if output_dir else None)
+        output_path = output_manager.create_output_dir(file_path)
 
-    # Process with backend
-    file_path_obj = Path(file_path)
-    intermediate = backend_instance.process(file_path_obj, format)
+        # Process with backend
+        file_path_obj = Path(file_path)
+        intermediate = backend_instance.process(file_path_obj, format)
 
-    # Save intermediate JSON
-    intermediate_path = output_manager.get_output_path(output_path, "intermediate.json")
-    import json
-    with open(intermediate_path, 'w', encoding='utf-8') as f:
-        json.dump(intermediate, f, ensure_ascii=False, indent=2)
+        # Save intermediate JSON
+        intermediate_path = output_manager.get_output_path(output_path, "intermediate.json")
+        import json
+        with open(intermediate_path, 'w', encoding='utf-8') as f:
+            json.dump(intermediate, f, ensure_ascii=False, indent=2)
 
-    # Convert to markdown
-    markdown_converter = MarkdownConverter(intermediate)
-    markdown_content = markdown_converter.convert()
-    markdown_path = output_manager.get_output_path(output_path, "output.md")
-    with open(markdown_path, 'w', encoding='utf-8') as f:
-        f.write(markdown_content)
+        # Convert to markdown
+        markdown_converter = MarkdownConverter(intermediate)
+        markdown_content = markdown_converter.convert()
+        markdown_path = output_manager.get_output_path(output_path, "output.md")
+        with open(markdown_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
 
-    # Save index
-    index_generator = IndexGenerator(intermediate)
-    index_path = output_manager.get_output_path(output_path, "index.json")
-    index_generator.save_to_file(str(index_path))
+        # Save index
+        index_generator = IndexGenerator(intermediate)
+        index_path = output_manager.get_output_path(output_path, "index.json")
+        index_generator.save_to_file(str(index_path))
 
-    return {
-        "success": True,
-        "output_directory": str(output_path),
-        "backend_used": backend_instance.name,
-        "warnings": warnings,
-        "files": {
-            "intermediate_json": str(intermediate_path),
-            "markdown": str(markdown_path),
-            "index_json": str(index_path)
+        return {
+            "success": True,
+            "output_directory": str(output_path),
+            "backend_used": backend_instance.name,
+            "warnings": warnings,
+            "files": {
+                "intermediate_json": str(intermediate_path),
+                "markdown": str(markdown_path),
+                "index_json": str(index_path)
+            }
         }
-    }
+    except Exception as e:
+        logger.error(f"Processing failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "backend_used": backend_instance.name,
+            "warnings": warnings
+        }
 
 
 @mcp.tool()
@@ -1274,45 +1369,54 @@ async def process_binary_file(
     if backend_instance.warning:
         warnings.append(backend_instance.warning)
 
-    # Create output directory
-    output_manager = OutputManager(base_dir=Path(output_dir) if output_dir else None)
-    output_path = output_manager.create_output_dir(file_path)
-    images_dir = output_path / "images"
+    try:
+        # Create output directory
+        output_manager = OutputManager(base_dir=Path(output_dir) if output_dir else None)
+        output_path = output_manager.create_output_dir(file_path)
+        images_dir = output_path / "images"
 
-    # Process with backend
-    file_path_obj = Path(file_path)
-    intermediate = backend_instance.process(file_path_obj, backend_format, extract_images=extract_images, images_output_dir=str(images_dir))
+        # Process with backend
+        file_path_obj = Path(file_path)
+        intermediate = backend_instance.process(file_path_obj, backend_format, extract_images=extract_images, images_output_dir=str(images_dir))
 
-    # Save intermediate JSON
-    intermediate_path = output_manager.get_output_path(output_path, "intermediate.json")
-    import json
-    with open(intermediate_path, 'w', encoding='utf-8') as f:
-        json.dump(intermediate, f, ensure_ascii=False, indent=2)
+        # Save intermediate JSON
+        intermediate_path = output_manager.get_output_path(output_path, "intermediate.json")
+        import json
+        with open(intermediate_path, 'w', encoding='utf-8') as f:
+            json.dump(intermediate, f, ensure_ascii=False, indent=2)
 
-    # Convert to markdown
-    markdown_converter = MarkdownConverter(intermediate)
-    markdown_content = markdown_converter.convert()
-    markdown_path = output_manager.get_output_path(output_path, "output.md")
-    with open(markdown_path, 'w', encoding='utf-8') as f:
-        f.write(markdown_content)
+        # Convert to markdown
+        markdown_converter = MarkdownConverter(intermediate)
+        markdown_content = markdown_converter.convert()
+        markdown_path = output_manager.get_output_path(output_path, "output.md")
+        with open(markdown_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
 
-    # Save index
-    index_generator = IndexGenerator(intermediate)
-    index_path = output_manager.get_output_path(output_path, "index.json")
-    index_generator.save_to_file(str(index_path))
+        # Save index
+        index_generator = IndexGenerator(intermediate)
+        index_path = output_manager.get_output_path(output_path, "index.json")
+        index_generator.save_to_file(str(index_path))
 
-    return {
-        "success": True,
-        "output_directory": str(output_path),
-        "backend_used": backend_instance.name,
-        "warnings": warnings,
-        "files": {
-            "intermediate_json": str(intermediate_path),
-            "markdown": str(markdown_path),
-            "index_json": str(index_path),
-            "images": str(images_dir) if extract_images and images_dir.exists() else None
+        return {
+            "success": True,
+            "output_directory": str(output_path),
+            "backend_used": backend_instance.name,
+            "warnings": warnings,
+            "files": {
+                "intermediate_json": str(intermediate_path),
+                "markdown": str(markdown_path),
+                "index_json": str(index_path),
+                "images": str(images_dir) if extract_images and images_dir.exists() else None
+            }
         }
-    }
+    except Exception as e:
+        logger.error(f"Processing failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "backend_used": backend_instance.name,
+            "warnings": warnings
+        }
 
 
 def main():
