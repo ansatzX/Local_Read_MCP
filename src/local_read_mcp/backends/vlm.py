@@ -184,31 +184,41 @@ class OpenAIVLBackend(DocumentBackend):
 
         # Try to process the document
         images = []
-        if format == "pdf":
-            # Render PDF to images
-            images = self._render_pdf_to_images(file_path, kwargs.get('max_pages', 3))
-        elif format in ["png", "jpg", "jpeg", "gif", "webp"]:
-            # Image file, use directly
-            images = [file_path]
+        temp_files = []
+        try:
+            if format == "pdf":
+                # Render PDF to images
+                images, temp_files = self._render_pdf_to_images(file_path, kwargs.get('max_pages', 3))
+            elif format in ["png", "jpg", "jpeg", "gif", "webp"]:
+                # Image file, use directly
+                images = [file_path]
 
-        if not images:
-            raise RuntimeError(f"Could not process {format} file: no images could be extracted/rendered")
+            if not images:
+                raise RuntimeError(f"Could not process {format} file: no images could be extracted/rendered")
 
-        # Call VLM API with images
-        vlm_response = self._call_openai_vlm(images, prompt)
-        return self._convert_vlm_response_to_intermediate(
-            vlm_response, file_path, format, file_size
-        )
+            # Call VLM API with images
+            vlm_response = self._call_openai_vlm(images, prompt)
+            return self._convert_vlm_response_to_intermediate(
+                vlm_response, file_path, format, file_size
+            )
+        finally:
+            # Clean up temporary files
+            for tmp_path in temp_files:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temporary file {tmp_path}: {e}")
 
-    def _render_pdf_to_images(self, pdf_path: Path, max_pages: int = 3) -> list:
-        """Render PDF pages to images."""
+    def _render_pdf_to_images(self, pdf_path: Path, max_pages: int = 3) -> tuple[list, list]:
+        """Render PDF pages to images. Returns (images, temp_files)."""
         try:
             import fitz  # PyMuPDF
         except ImportError:
             logger.warning("PyMuPDF not installed, cannot render PDF")
-            return []
+            return [], []
 
         images = []
+        temp_files = []
         try:
             doc = fitz.open(pdf_path)
             # Render first N pages
@@ -224,13 +234,15 @@ class OpenAIVLBackend(DocumentBackend):
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                     img.save(tmp, format="PNG")
-                    images.append(Path(tmp.name))
+                    tmp_path = Path(tmp.name)
+                    images.append(tmp_path)
+                    temp_files.append(tmp_path)
 
             doc.close()
         except Exception as e:
             logger.warning(f"Failed to render PDF: {e}")
 
-        return images
+        return images, temp_files
 
     def _get_default_prompt(self, format: str) -> str:
         """Get default prompt for document parsing."""
