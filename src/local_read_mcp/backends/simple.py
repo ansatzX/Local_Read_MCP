@@ -23,7 +23,7 @@ from ..converters import (
     ZipConverter,
 )
 from ..intermediate_json import IntermediateJSONBuilder
-from .base import DocumentBackend
+from .base import DocumentBackend, DEFAULT_BBOX
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,6 @@ class SimpleBackend(DocumentBackend):
 
         # Add structured blocks if result has them
         current_page = 1
-        bbox = [0, 0, 612, 792]  # Default page size
 
         # Add sections as section blocks
         if result and hasattr(result, 'sections') and result.sections:
@@ -125,7 +124,7 @@ class SimpleBackend(DocumentBackend):
                     builder.add_block(
                         type=section_type,
                         page=current_page,
-                        bbox=bbox,
+                        bbox=DEFAULT_BBOX,
                         level=level,
                         title=title,
                         content=content
@@ -139,8 +138,8 @@ class SimpleBackend(DocumentBackend):
                     builder.add_block(
                         type='table',
                         page=current_page,
-                        bbox=bbox,
-                        content=table_content
+                        bbox=DEFAULT_BBOX,
+                        markdown=table_content
                     )
 
         # Add images as image blocks
@@ -151,9 +150,9 @@ class SimpleBackend(DocumentBackend):
                 builder.add_block(
                     type='image',
                     page=current_page,
-                    bbox=bbox,
+                    bbox=DEFAULT_BBOX,
                     path=image_path,
-                    description=description
+                    caption=description
                 )
 
         # Always add the main text content as a fallback
@@ -161,7 +160,7 @@ class SimpleBackend(DocumentBackend):
             builder.add_block(
                 type="text",
                 page=current_page,
-                bbox=bbox,
+                bbox=DEFAULT_BBOX,
                 content=markdown_content
             )
 

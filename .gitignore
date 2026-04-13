@@ -229,3 +229,4 @@ tmp_archive/
 # Claude Code
 .claude/
 docs/
+*.md

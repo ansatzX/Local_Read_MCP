@@ -7,21 +7,20 @@ PDF classification utility to detect text-based vs scanned PDFs.
 Ported and simplified from MinerU's PDF classification logic.
 """
 
-from pathlib import Path
-from typing import Optional, Union
 import logging
 import re
 from io import BytesIO
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 # Try to import optional dependencies
 try:
-    from pdfminer.high_level import extract_text
-    from pdfminer.layout import LAParams, LTImage, LTFigure
-    from pdfminer.pdfpage import PDFPage
-    from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
     from pdfminer.converter import PDFPageAggregator
+    from pdfminer.high_level import extract_text
+    from pdfminer.layout import LAParams, LTFigure, LTImage
+    from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
+    from pdfminer.pdfpage import PDFPage
     PDFMINER_AVAILABLE = True
 except ImportError:
     PDFMINER_AVAILABLE = False
@@ -46,7 +45,7 @@ HIGH_IMAGE_COVERAGE_THRESHOLD = 0.8
 CID_RATIO_THRESHOLD = 0.05
 
 
-def classify_pdf(pdf_source: Union[str, Path, bytes]) -> str:
+def classify_pdf(pdf_source: str | Path | bytes) -> str:
     """
     Classify a PDF as text-based or scanned (OCR-needed).
 
@@ -85,11 +84,12 @@ def classify_pdf(pdf_source: Union[str, Path, bytes]) -> str:
     return "ocr"
 
 
-def _classify_pypdfium(pdf_bytes: bytes) -> Optional[str]:
+def _classify_pypdfium(pdf_bytes: bytes) -> str | None:
     """Classify PDF using pypdfium2 (fastest)."""
     if not PYPDFIUM_AVAILABLE:
         return None
 
+    pdf = None
     try:
         pdf = pdfium.PdfDocument(pdf_bytes)
         page_count = len(pdf)
@@ -125,8 +125,6 @@ def _classify_pypdfium(pdf_bytes: bytes) -> Optional[str]:
         # Check for high image coverage
         high_image_coverage = _check_high_image_coverage_pypdfium(pdf, page_indices)
 
-        pdf.close()
-
         # Decision logic
         if avg_chars < CHARS_THRESHOLD:
             return "ocr"
@@ -140,9 +138,12 @@ def _classify_pypdfium(pdf_bytes: bytes) -> Optional[str]:
     except Exception as e:
         logger.debug(f"pypdfium classification failed: {e}")
         return None
+    finally:
+        if pdf is not None:
+            pdf.close()
 
 
-def _classify_pdfminer(pdf_bytes: bytes) -> Optional[str]:
+def _classify_pdfminer(pdf_bytes: bytes) -> str | None:
     """Classify PDF using pdfminer."""
     if not PDFMINER_AVAILABLE:
         return None
@@ -181,7 +182,7 @@ def _classify_pdfminer(pdf_bytes: bytes) -> Optional[str]:
         return None
 
 
-def _classify_simple(pdf_bytes: bytes) -> Optional[str]:
+def _classify_simple(pdf_bytes: bytes) -> str | None:
     """Simple fallback classification using basic text extraction."""
     if not PDFMINER_AVAILABLE:
         return None
