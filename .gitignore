@@ -39,6 +39,7 @@ pip-delete-this-directory.txt
 # Unit test / coverage reports
 # Local configuration
 mineru.json
+.local_read_mcp/
 htmlcov/
 .tox/
 .nox/
