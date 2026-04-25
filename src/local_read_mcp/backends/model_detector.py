@@ -1,6 +1,3 @@
-# Copyright (c) 2025
-# This source code is licensed under MIT License.
-
 """
 Model detection and configuration for MinerU backend.
 """
@@ -30,8 +27,6 @@ class ModelDetector:
         """Check if MinerU models are available."""
         if not self.mineru_models_dir.exists():
             return False
-        # Check for at least some model files
-        # This is a simplified check - real implementation would check for specific models
         return any(self.mineru_models_dir.iterdir())
 
     @property
@@ -45,25 +40,6 @@ class ModelDetector:
             f"  2. Extract to: {self.mineru_models_dir}\n"
             f"  Or set {MINERU_MODELS_DIR_ENV} environment variable\n"
             f"Falling back to Simple backend."
-        )
-
-    @property
-    def vlm_available(self) -> bool:
-        """Check if VLM API is configured."""
-        from ..config import get_config
-        config = get_config()
-        return bool(config.api_key)
-
-    @property
-    def vlm_warning(self) -> Optional[str]:
-        """Get warning message for VLM backends."""
-        if self.vlm_available:
-            return None
-        return (
-            "VLM API not configured. To use VLM backends:\n"
-            "  1. Set VISION_API_KEY (or OPENAI_API_KEY) environment variable\n"
-            "  2. Optionally set VISION_BASE_URL and VISION_MODEL\n"
-            "Falling back to Simple backend."
         )
 
 

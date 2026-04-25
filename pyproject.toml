@@ -1,7 +1,7 @@
 [project]
 name = "local_read_mcp"
-version = "0.1.0"
-description = "A Model Context Protocol server for document processing with vision support"
+version = "0.2.0"
+description = "MCP server for local document processing — structured extraction from PDFs, Office, images, and code"
 readme = "README.md"
 authors = [
     { name = "ansatz Vibe", email = "ansatzMe@outlook.com" }

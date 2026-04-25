@@ -42,10 +42,6 @@ class Config:
         # Vision settings
         self.vision_max_image_size_mb = int(os.environ.get("VISION_MAX_IMAGE_SIZE_MB", "20"))
 
-        # PDF processing settings
-        self.pdf_extract_images_default = os.environ.get("PDF_EXTRACT_IMAGES_DEFAULT", "false").lower() == "true"
-        self.pdf_images_output_dir = os.environ.get("PDF_IMAGES_OUTPUT_DIR", "/tmp/local_read_mcp_images")
-
         # Logging
         log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
         logging.basicConfig(
@@ -78,7 +74,6 @@ class Config:
             f"  base_url={self.base_url},\n"
             f"  model={self.model},\n"
             f"  vision_enabled={self.vision_enabled},\n"
-            f"  pdf_extract_images_default={self.pdf_extract_images_default}\n"
             f")"
         )
 

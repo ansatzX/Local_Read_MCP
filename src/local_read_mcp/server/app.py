@@ -41,7 +41,6 @@ from .utils import (
     apply_pagination,
     create_simple_converter_wrapper,
     duplicate_detector,
-    fix_tool_arguments,
 )
 from .vision import call_vision_api
 
@@ -96,20 +95,6 @@ _FORMAT_BY_EXTENSION: dict[str, str] = {
     ".zip": "zip",
 }
 
-_TEXT_FORMAT_GROUPS: list[tuple[str, str]] = [
-    ("Plain Text", "text"),
-    ("JSON", "json"),
-    ("CSV", "csv"),
-    ("YAML", "yaml"),
-]
-_BINARY_FORMAT_GROUPS: list[tuple[str, str]] = [
-    ("PDF", "pdf"),
-    ("Word", "word"),
-    ("Excel", "excel"),
-    ("PowerPoint", "ppt"),
-    ("HTML", "html"),
-    ("ZIP", "zip"),
-]
 def get_simple_converter_wrapper(format_name: str) -> Callable[..., Any]:
     """Get (and cache) wrapper for simple converters."""
     if format_name in _SIMPLE_CONVERTER_CACHE:
@@ -119,48 +104,6 @@ def get_simple_converter_wrapper(format_name: str) -> Callable[..., Any]:
     wrapper = create_simple_converter_wrapper(converter_func, converter_name)
     _SIMPLE_CONVERTER_CACHE[format_name] = wrapper
     return wrapper
-
-
-def _extract_common_read_params(
-    tool_name: str,
-    params: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Extract shared read_* parameters after applying argument auto-fixes."""
-    fixed_params = fix_tool_arguments(tool_name, params)
-    common_params = {
-        "file_path": fixed_params.get("file_path", params.get("file_path")),
-        "format": fixed_params.get("format", params.get("format")),
-        "chunk": fixed_params.get("chunk", params.get("chunk")),
-        "chunk_size": fixed_params.get("chunk_size", params.get("chunk_size")),
-        "offset": fixed_params.get("offset", params.get("offset")),
-        "limit": fixed_params.get("limit", params.get("limit")),
-        "extract_sections": fixed_params.get("extract_sections", params.get("extract_sections")),
-        "extract_tables": fixed_params.get("extract_tables", params.get("extract_tables")),
-        "extract_metadata": fixed_params.get("extract_metadata", params.get("extract_metadata")),
-        "preview_only": fixed_params.get("preview_only", params.get("preview_only")),
-        "preview_lines": fixed_params.get("preview_lines", params.get("preview_lines")),
-        "session_id": fixed_params.get("session_id", params.get("session_id")),
-        "return_format": fixed_params.get("return_format", params.get("return_format")),
-    }
-    return common_params, fixed_params
-
-
-def _extensions_for_format(format_key: str) -> list[str]:
-    """Return all extensions mapped to a specific format key."""
-    return [ext for ext, mapped_format in _FORMAT_BY_EXTENSION.items() if mapped_format == format_key]
-
-
-def _build_supported_format_groups() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Build supported format groups from shared extension mapping constants."""
-    text_formats = [
-        {"name": display_name, "extensions": _extensions_for_format(format_key)}
-        for display_name, format_key in _TEXT_FORMAT_GROUPS
-    ]
-    binary_formats = [
-        {"name": display_name, "extensions": _extensions_for_format(format_key)}
-        for display_name, format_key in _BINARY_FORMAT_GROUPS
-    ]
-    return text_formats, binary_formats
 
 
 def detect_format(file_path: str) -> str | None:
@@ -376,8 +319,8 @@ async def analyze_image(
     image_path: str,
     question: str = "Describe this image in detail. What type of content is it?",
     api_key: str | None = None
-) -> str:
-    """Analyze an image using OpenAI-compatible vision API.
+) -> dict[str, Any]:
+    """Analyze an image using OpenAI-compatible vision API and save result to .local_read_mcp/analysis/.
 
     Args:
         image_path: Path to the image file to analyze
@@ -385,7 +328,7 @@ async def analyze_image(
         api_key: API key (overrides config if provided)
 
     Returns:
-        Answer from the vision model
+        Dict with analysis result and saved file path
 
     Environment Variables (.env):
         VISION_API_KEY: Your API key (or OPENAI_API_KEY)
@@ -394,29 +337,54 @@ async def analyze_image(
         VISION_MAX_IMAGE_SIZE_MB: Max image size in MB (default: 20)
     """
     if not VISION_ENABLED:
-        return "Vision is not enabled. Set VISION_API_KEY or OPENAI_API_KEY in .env file."
+        return {"success": False, "error": "Vision is not enabled. Set VISION_API_KEY or OPENAI_API_KEY in .env file."}
 
     if not os.path.exists(image_path):
-        return f"Error: Image file not found: {image_path}"
+        return {"success": False, "error": f"Image file not found: {image_path}"}
 
-    # Check file size
     file_size_mb = os.path.getsize(image_path) / (1024 * 1024)
     max_size = _config.vision_max_image_size_mb
     if file_size_mb > max_size:
-        return f"Error: Image too large ({file_size_mb:.2f}MB). Maximum: {max_size}MB"
+        return {"success": False, "error": f"Image too large ({file_size_mb:.2f}MB). Maximum: {max_size}MB"}
 
-    # Use provided API key or config
     effective_api_key = api_key or _config.api_key
     if not effective_api_key:
-        return "Error: API key not configured. Set VISION_API_KEY or OPENAI_API_KEY in .env."
+        return {"success": False, "error": "API key not configured. Set VISION_API_KEY or OPENAI_API_KEY in .env."}
 
-    return await call_vision_api(
+    # Call vision API
+    result_text = await call_vision_api(
         image_path=image_path,
         question=question,
         api_key=effective_api_key,
         base_url=_config.base_url,
         model=_config.model
     )
+
+    # Save to .local_read_mcp/analysis/ in the working directory
+    from pathlib import Path as _Path
+    analysis_dir = _Path.cwd() / ".local_read_mcp" / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+
+    image_name = _Path(image_path).stem
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in image_name)
+    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    result_filename = f"{safe_name}_{timestamp}.md"
+    result_path = analysis_dir / result_filename
+
+    with open(result_path, 'w', encoding='utf-8') as f:
+        f.write(f"# Image Analysis: {image_name}\n\n")
+        f.write(f"- **Source**: `{image_path}`\n")
+        f.write(f"- **Question**: {question}\n")
+        f.write(f"- **Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write("## Analysis\n\n")
+        f.write(result_text)
+        f.write("\n")
+
+    return {
+        "success": True,
+        "analysis": result_text,
+        "saved_path": str(result_path),
+    }
 
 
 @mcp.tool()
@@ -622,626 +590,81 @@ async def process_document(
             }
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 @mcp.tool()
-async def read_text_file(
+async def process_binary_file(
     file_path: str,
     format: str | None = None,
-    chunk: int | None = 1,
-    chunk_size: int | None = 10000,
-    offset: int | None = None,
-    limit: int | None = None,
-    extract_sections: bool | None = False,
-    extract_tables: bool | None = False,
-    extract_metadata: bool | None = False,
-    preview_only: bool | None = False,
-    preview_lines: int | None = 100,
-    session_id: str | None = None,
-    return_format: str | None = "text",
-    # Backend selection
     backend: str = "auto",
-) -> dict[str, Any]:
-    """Read text-based files.
-
-    Supported formats: .txt, .md, .py, .sh, .json, .csv, .yaml, .yml
-
-    Args:
-        file_path: Path to the file to read
-        format: Explicit format override (text/json/csv/yaml)
-        chunk: Chunk number for content pagination (1-indexed). Default: 1.
-        chunk_size: Number of characters per chunk. Default: 10000.
-        offset: Character offset (alternative to chunk). If specified, overrides chunk.
-        limit: Character limit (alternative to chunk_size). If specified, overrides chunk_size.
-        extract_sections: Extract document sections/headings. Use for structured documents. Default: False.
-        extract_tables: Extract table information (CSV only). Default: False.
-        extract_metadata: Extract file metadata. Use with return_format="json". Default: False.
-        preview_only: Return only first N lines without full conversion. Use for quick assessment. Default: False.
-        preview_lines: Number of lines for preview mode. Default: 100.
-        session_id: Session ID for resuming pagination. Reuse for consecutive chunk requests.
-        return_format: Output format: 'json' (structured with metadata/sections) or 'text' (plain). Default: 'text'.
-        backend: Backend to use (auto, simple). Default: auto.
-
-    Returns:
-        A dictionary containing the text content or error message.
-        If return_format='json', returns enhanced structure with metadata, sections, pagination_info, session_id.
-    """
-    common_params, _ = _extract_common_read_params("read_text_file", locals().copy())
-
-    file_path = common_params["file_path"]
-    format = common_params["format"]
-    chunk = common_params["chunk"]
-    chunk_size = common_params["chunk_size"]
-    offset = common_params["offset"]
-    limit = common_params["limit"]
-    extract_sections = common_params["extract_sections"]
-    extract_tables = common_params["extract_tables"]
-    extract_metadata = common_params["extract_metadata"]
-    preview_only = common_params["preview_only"]
-    preview_lines = common_params["preview_lines"]
-    session_id = common_params["session_id"]
-    return_format = common_params["return_format"]
-
-    # Auto-detect format if not provided
-    if not format:
-        format = detect_format(file_path)
-
-    # Use backend path
-    try:
-        from ..backends import BackendType, get_registry
-        from ..converters.base import DocumentConverterResult
-        from ..index_generator import IndexGenerator
-        from ..markdown_converter import MarkdownConverter
-
-        registry = get_registry()
-
-        # Parse backend type
-        try:
-            backend_type = BackendType(backend)
-        except ValueError:
-            backend_type = BackendType.AUTO
-
-        # Select backend
-        if backend_type == BackendType.AUTO:
-            backend_instance = registry.select_best(format)
-        else:
-            backend_instance = registry.get(backend_type)
-
-        if backend_instance is None:
-            backend_instance = registry.get(BackendType.SIMPLE)
-
-        # Validate that the selected backend supports the format
-        if not backend_instance.supports_format(format):
-            raise ValueError(f"Backend '{backend_instance.name}' does not support format '{format}'")
-
-        warnings = []
-        if backend_instance.warning:
-            warnings.append(backend_instance.warning)
-
-        # Process with backend
-        file_path_obj = Path(file_path)
-        intermediate = backend_instance.process(file_path_obj, format)
-
-        # Convert intermediate to markdown
-        markdown_converter = MarkdownConverter(intermediate)
-        full_content = markdown_converter.convert()
-
-        # Get sections and tables from index
-        index_generator = IndexGenerator(intermediate)
-        index_data = index_generator.generate()
-
-        # Create a wrapper converter function for process_document
-        def backend_converter(fp: str, **kwargs):
-            return DocumentConverterResult(
-                title=intermediate.get("metadata", {}).get("title"),
-                text_content=full_content,
-                metadata=intermediate.get("source", {}),
-                sections=index_data.get("sections", []),
-                tables=index_data.get("tables", [])
-            )
-
-        # Delegate to process_document
-        result = await process_document(
-            file_path=file_path,
-            converter_func=backend_converter,
-            converter_kwargs={},
-            chunk=chunk,
-            chunk_size=chunk_size,
-            offset=offset,
-            limit=limit,
-            extract_sections=extract_sections,
-            extract_tables=extract_tables,
-            extract_metadata=extract_metadata,
-            preview_only=preview_only,
-            preview_lines=preview_lines,
-            session_id=session_id,
-            return_format=return_format
-        )
-
-        # Add backend info to the result
-        if result.get("success"):
-            result["backend_used"] = backend_instance.name
-            if warnings:
-                result["warnings"] = warnings
-
-        return result
-
-    except Exception as e:
-        logger.warning(f"Backend processing failed: {e}, falling back to original logic")
-
-    # Original logic as fallback
-    # Map format to converter
-    converter_kwargs = {
-        "extract_metadata": extract_metadata,
-        "extract_sections": extract_sections,
-        "extract_tables": extract_tables,
-    }
-
-    if format in {"text", "json", "csv", "yaml"}:
-        converter_func = get_simple_converter_wrapper(format)
-    else:
-        # Unknown format - use markitdown fallback
-        converter_func = get_simple_converter_wrapper("markitdown")
-
-    return await process_document(
-        file_path=file_path,
-        converter_func=converter_func,
-        converter_kwargs=converter_kwargs,
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format
-    )
-
-
-@mcp.tool()
-async def read_binary_file(
-    file_path: str,
-    format: str | None = None,
-    # Standard pagination
-    chunk: int | None = 1,
-    chunk_size: int | None = 10000,
-    offset: int | None = None,
-    limit: int | None = None,
-    # Standard structured extraction
-    extract_sections: bool | None = False,
-    extract_tables: bool | None = False,
-    extract_metadata: bool | None = False,
-    preview_only: bool | None = False,
-    preview_lines: int | None = 100,
-    session_id: str | None = None,
-    return_format: str | None = "text",
-    # PDF-specific features (only used when format=pdf or auto-detected as pdf)
+    # Page range control
+    chapter_split: bool | str | int = "auto",
+    start_page: int | None = None,
+    end_page: int | None = None,
+    page_batch_size: int = 64,
+    # PDF-specific
     extract_images: bool | None = None,
-    render_images: bool | None = False,
-    render_dpi: int | None = 200,
-    render_format: str | None = "png",
-    extract_forms: bool | None = False,
-    inspect_struct: bool | None = False,
-    include_coords: bool | None = False,
-    images_output_dir: str | None = None,
-    # Backend selection
-    backend: str = "auto",
+    render_images: bool = False,
+    render_dpi: int = 200,
+    render_format: str = "png",
+    extract_forms: bool = False,
+    inspect_struct: bool = False,
+    include_coords: bool = False,
 ) -> dict[str, Any]:
-    """Read binary/document files.
+    """MUST use this tool for ANY binary/document file before reading it.
 
-    Supported formats: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .html, .htm, .zip
+    This includes PDF, Word, Excel, PowerPoint, HTML, ZIP, images, and any
+    file that is not plain text. The built-in Read tool cannot handle these
+    formats properly; processing them through this tool first is required.
 
-    PDF-specific features (only available for PDF files):
-    - render_images: Render pages to images
-    - extract_forms: Extract form fields
-    - inspect_struct: Get complete PDF structure
-    - include_coords: Include text coordinates
-
-    Note: PDF-specific parameters are ignored for non-PDF files.
+    Results are saved in .local_read_mcp/<file>_<timestamp>/
+    with intermediate.json, output.md and index.json.
+    For large PDFs, chapter_split detects sections and processes each chunk
+    independently, then merges the results.
 
     Args:
-        file_path: Path to the file to read
-        format: Explicit format override (pdf/word/excel/ppt/html/zip)
-        chunk: Chunk number for content pagination (1-indexed). Default: 1.
-        chunk_size: Number of characters per chunk. Default: 10000.
-        offset: Character offset (alternative to chunk). If specified, overrides chunk.
-        limit: Character limit (alternative to chunk_size). If specified, overrides chunk_size.
-        extract_sections: Extract document sections/headings. Use for structured documents. Default: False.
-        extract_tables: Extract table information. Default: False.
-        extract_metadata: Extract file metadata (size, path, timestamp, PDF pages). Use with return_format="json". Default: False.
-        preview_only: Return only first N lines without full conversion. Use for quick assessment. Default: False.
-        preview_lines: Number of lines for preview mode. Default: 100.
-        session_id: Session ID for resuming pagination. Reuse for consecutive chunk requests.
-        return_format: Output format: 'json' (structured with metadata/sections) or 'text' (plain). Default: 'text'.
-        extract_images: Extract images from PDF. If omitted, auto-enabled when vision is configured; otherwise disabled.
-        render_images: Render PDF pages to images. Default: False.
-        render_dpi: DPI for rendered images. Default: 200.
-        render_format: Format for rendered images (png or jpeg). Default: png.
-        extract_forms: Extract form fields from PDF. Default: False.
-        inspect_struct: Get complete PDF structure (metadata, outline, fonts, etc.). Default: False.
-        include_coords: Include text with bounding box coordinates. Default: False.
-        images_output_dir: Directory to save extracted/rendered images. If None, uses temporary directory. Default: None.
-        backend: Backend to use (auto, simple, mineru, qwen-vl, openai-vlm). Default: auto.
-
-    Returns:
-        A dictionary containing the text content or error message.
-        If return_format='json', returns enhanced structure with metadata, sections, pagination_info, pdf_pages, images, session_id.
+        file_path: Path to the file to process.
+        format: Override auto-detected format.
+        backend: Backend (auto/simple/vlm-hybrid). Default: auto.
+        chapter_split: "auto" (split >30p), "chapter", N (fixed pages), False (off).
+        start_page: 0-based start page.
+        end_page: 0-based end page.
+        page_batch_size: Pages per batch (default: 64).
+        extract_images: Extract images from PDF (auto if vision configured).
+        render_images: Render PDF pages to images.
+        render_dpi: Render DPI (default: 200).
+        render_format: png or jpeg (default: png).
+        extract_forms: Extract PDF form fields.
+        inspect_struct: Get PDF structure metadata.
+        include_coords: Include text with bounding boxes.
     """
-    common_params, fixed_params = _extract_common_read_params("read_binary_file", locals().copy())
-
-    file_path = common_params["file_path"]
-    format = common_params["format"]
-    chunk = common_params["chunk"]
-    chunk_size = common_params["chunk_size"]
-    offset = common_params["offset"]
-    limit = common_params["limit"]
-    extract_sections = common_params["extract_sections"]
-    extract_tables = common_params["extract_tables"]
-    extract_metadata = common_params["extract_metadata"]
-    preview_only = common_params["preview_only"]
-    preview_lines = common_params["preview_lines"]
-    session_id = common_params["session_id"]
-    return_format = common_params["return_format"]
-
-    extract_images = fixed_params.get("extract_images", extract_images)
-    render_images = fixed_params.get("render_images", render_images)
-    render_dpi = fixed_params.get("render_dpi", render_dpi)
-    render_format = fixed_params.get("render_format", render_format)
-    extract_forms = fixed_params.get("extract_forms", extract_forms)
-    inspect_struct = fixed_params.get("inspect_struct", inspect_struct)
-    include_coords = fixed_params.get("include_coords", include_coords)
-    images_output_dir = fixed_params.get("images_output_dir", images_output_dir)
-
-    # Auto-enable extract_images if vision is configured and value was not explicitly set
-    if extract_images is None:
-        extract_images = bool(VISION_ENABLED)
-        if extract_images:
-            logger.info("Vision enabled: auto-enabling extract_images=True for PDF")
-
-    # Auto-detect format if not provided
-    if not format:
-        format = detect_format(file_path)
-
-    # Use backend path (default)
-    try:
-        from ..backends import BackendType, get_registry
-        from ..converters.base import DocumentConverterResult
-        from ..index_generator import IndexGenerator
-        from ..markdown_converter import MarkdownConverter
-
-        registry = get_registry()
-
-        # Parse backend type
-        try:
-            backend_type = BackendType(backend)
-        except ValueError:
-            backend_type = BackendType.AUTO
-
-        # Select backend
-        if backend_type == BackendType.AUTO:
-            backend_instance = registry.select_best(format)
-        else:
-            backend_instance = registry.get(backend_type)
-
-        if backend_instance is None:
-            backend_instance = registry.get(BackendType.SIMPLE)
-
-        # Validate that the selected backend supports the format
-        if not backend_instance.supports_format(format):
-            raise ValueError(f"Backend '{backend_instance.name}' does not support format '{format}'")
-
-        warnings = []
-        if backend_instance.warning:
-            warnings.append(backend_instance.warning)
-
-        # Process with backend
-        file_path_obj = Path(file_path)
-        intermediate = backend_instance.process(
-            file_path_obj,
-            format,
-            extract_images=extract_images,
-            images_output_dir=images_output_dir
-        )
-
-        # Convert intermediate to markdown
-        markdown_converter = MarkdownConverter(intermediate)
-        full_content = markdown_converter.convert()
-
-        # Get sections and tables from index
-        index_generator = IndexGenerator(intermediate)
-        index_data = index_generator.generate()
-
-        # Create a wrapper converter function for process_document
-        def backend_converter(fp: str, **kwargs):
-            return DocumentConverterResult(
-                title=intermediate.get("metadata", {}).get("title"),
-                text_content=full_content,
-                metadata=intermediate.get("source", {}),
-                sections=index_data.get("sections", []),
-                tables=index_data.get("tables", [])
-            )
-
-        # Delegate to process_document
-        result = await process_document(
-            file_path=file_path,
-            converter_func=backend_converter,
-            converter_kwargs={},
-            chunk=chunk,
-            chunk_size=chunk_size,
-            offset=offset,
-            limit=limit,
-            extract_sections=extract_sections,
-            extract_tables=extract_tables,
-            extract_metadata=extract_metadata,
-            preview_only=preview_only,
-            preview_lines=preview_lines,
-            session_id=session_id,
-            return_format=return_format
-        )
-
-        # Add backend info to the result
-        if result.get("success"):
-            result["backend_used"] = backend_instance.name
-            if warnings:
-                result["warnings"] = warnings
-
-        return result
-
-    except Exception as e:
-        logger.warning(f"Backend processing failed: {e}, falling back to original logic")
-
-    # Special case: PDF has its own implementation
-    if format == "pdf":
-        return await process_pdf_document(
-            file_path=file_path,
-            chunk=chunk,
-            chunk_size=chunk_size,
-            offset=offset,
-            limit=limit,
-            extract_sections=extract_sections,
-            extract_tables=extract_tables,
-            extract_metadata=extract_metadata,
-            extract_images=extract_images,
-            render_images=render_images,
-            render_dpi=render_dpi,
-            render_format=render_format,
-            extract_forms=extract_forms,
-            inspect_struct=inspect_struct,
-            include_coords=include_coords,
-            images_output_dir=images_output_dir,
-            preview_only=preview_only,
-            preview_lines=preview_lines,
-            session_id=session_id,
-            return_format=return_format,
-        )
-
-    # All other formats use process_document
-    converter_kwargs = {
-        "extract_metadata": extract_metadata,
-        "extract_sections": extract_sections,
-        "extract_tables": extract_tables,
-    }
-
-    if format == "word":
-        converter_func = DocxConverter
-    elif format == "excel":
-        converter_func = XlsxConverter
-    elif format == "ppt":
-        converter_func = get_simple_converter_wrapper("ppt")
-    elif format == "html":
-        converter_func = HtmlConverter
-    elif format == "zip":
-        converter_func = get_simple_converter_wrapper("zip")
-    else:
-        # Unknown format - use markitdown fallback
-        converter_func = get_simple_converter_wrapper("markitdown")
-
-    return await process_document(
-        file_path=file_path,
-        converter_func=converter_func,
-        converter_kwargs=converter_kwargs,
-        chunk=chunk,
-        chunk_size=chunk_size,
-        offset=offset,
-        limit=limit,
-        extract_sections=extract_sections,
-        extract_tables=extract_tables,
-        extract_metadata=extract_metadata,
-        preview_only=preview_only,
-        preview_lines=preview_lines,
-        session_id=session_id,
-        return_format=return_format
-    )
-
-
-
-
-@mcp.tool()
-async def get_supported_formats() -> dict[str, Any]:
-    """List all supported file formats.
-
-    Returns:
-        Dictionary with format categories and extensions.
-    """
-    text_formats, binary_formats = _build_supported_format_groups()
-    return {
-        "text_formats": text_formats,
-        "binary_formats": binary_formats,
-        "tools": {
-            "main": ["read_text_file", "read_binary_file"],
-            "new": ["process_text_file", "process_binary_file"],
-            "auxiliary": ["analyze_image", "get_vision_status", "cleanup_temp_files"]
-        },
-        "notes": [
-            "Use read_text_file/read_binary_file for direct content access",
-            "Use process_text_file/process_binary_file to save results to files",
-            "File format is auto-detected by extension",
-            "Explicit format parameter can override auto-detection",
-        ]
-    }
-
-
-@mcp.tool()
-async def cleanup_temp_files(
-    older_than_hours: int | None = 24,
-    dry_run: bool | None = False,
-    cleanup_pdf_images: bool | None = True,
-    cleanup_zip_extracts: bool | None = True,
-    custom_directory: str | None = None
-) -> dict[str, Any]:
-    """Clean up temporary files created by Local Read MCP tools.
-
-    Use this tool after completing your tasks and confirming no further need for temporary files.
-
-    Args:
-        older_than_hours: Only clean up files older than this many hours. Default: 24
-        dry_run: If True, only show what would be deleted without actually deleting. Default: False
-        cleanup_pdf_images: Clean up PDF image extraction directories. Default: True
-        cleanup_zip_extracts: Clean up ZIP extraction directories. Default: True
-        custom_directory: Optional custom directory to clean up (in addition to temp dirs)
-
-    Returns:
-        Dictionary with cleanup results including number of files/directories deleted
-    """
-    import shutil
-    import tempfile
-    from datetime import datetime
-
-    logger = logging.getLogger(__name__)
-
-    temp_dir = tempfile.gettempdir()
-    cutoff_time = datetime.now().timestamp() - (older_than_hours * 3600) if older_than_hours else 0
-
-    deleted_files = 0
-    deleted_dirs = 0
-    errors = []
-    scanned_dirs = []
-
-    # Directories to clean up (prefix patterns)
-    target_patterns = []
-    if cleanup_pdf_images:
-        target_patterns.append("pdf_images_")
-    if cleanup_zip_extracts:
-        target_patterns.append("zip_extract_")
-
-    def is_old_enough(path: str) -> bool:
-        """Check if file/directory is older than cutoff time."""
-        if older_than_hours == 0:
-            return True
-        try:
-            mtime = os.path.getmtime(path)
-            return mtime < cutoff_time
-        except Exception:
-            return False  # If we can't get mtime, skip
-
-    def delete_path(path: str, is_dir: bool) -> bool:
-        """Delete a file or directory."""
-        nonlocal deleted_files, deleted_dirs
-        try:
-            if dry_run:
-                logger.info(f"[Dry run] Would delete: {path}")
-                return True
-            if is_dir:
-                shutil.rmtree(path)
-                deleted_dirs += 1
-            else:
-                os.remove(path)
-                deleted_files += 1
-            return True
-        except Exception as e:
-            error_msg = f"Failed to delete {path}: {e}"
-            logger.warning(error_msg)
-            errors.append(error_msg)
-            return False
-
-    # Scan temp directory for matching directories
-    try:
-        for item in os.listdir(temp_dir):
-            item_path = os.path.join(temp_dir, item)
-            if os.path.isdir(item_path):
-                # Check if directory matches any of our patterns
-                for pattern in target_patterns:
-                    if item.startswith(pattern):
-                        scanned_dirs.append(item_path)
-                        if is_old_enough(item_path):
-                            delete_path(item_path, is_dir=True)
-                        break
-    except Exception as e:
-        error_msg = f"Error scanning temp directory {temp_dir}: {e}"
-        logger.error(error_msg)
-        errors.append(error_msg)
-
-    # Clean up custom directory if provided
-    if custom_directory and os.path.exists(custom_directory):
-        if os.path.isdir(custom_directory):
-            scanned_dirs.append(custom_directory)
-            if is_old_enough(custom_directory):
-                delete_path(custom_directory, is_dir=True)
-        else:
-            if is_old_enough(custom_directory):
-                delete_path(custom_directory, is_dir=False)
-
-    # Prepare result
-    result = {
-        "success": True,
-        "dry_run": dry_run,
-        "older_than_hours": older_than_hours,
-        "deleted": {
-            "files": deleted_files,
-            "directories": deleted_dirs,
-            "total": deleted_files + deleted_dirs
-        },
-        "scanned_directories": scanned_dirs,
-        "temp_directory": temp_dir
-    }
-
-    if errors:
-        result["errors"] = errors
-        result["success"] = False
-
-    if dry_run:
-        result["message"] = "Dry run completed - no files were actually deleted"
-    else:
-        result["message"] = f"Cleaned up {deleted_files} files and {deleted_dirs} directories"
-
-    return result
-
-
-@mcp.tool()
-async def process_text_file(
-    file_path: str,
-    format: str | None = None,
-    output_dir: str | None = None,
-    backend: str = "auto"
-) -> dict[str, Any]:
-    """Process text-based files and save results to output directory.
-
-    Supported formats: .txt, .md, .py, .sh, .json, .csv, .yaml, .yml
-
-    Args:
-        file_path: Path to the file to read
-        format: Explicit format override (text/json/csv/yaml)
-        output_dir: Directory to save output files (defaults to .local_read_mcp in current directory)
-        backend: Backend to use (auto, simple)
-
-    Returns:
-        Dictionary with paths to generated files
-    """
-    # Detect format if not specified
+    # ── 1. Format detection ──────────────────────────────────────
     if format is None:
-        format = detect_format(file_path) or "text"
+        format = detect_format(file_path)
+    if format is None:
+        format = "text"
 
-    # Get backend
+    # Auto-enable extract_images for PDF if vision is configured
+    if format == "pdf" and extract_images is None:
+        extract_images = bool(VISION_ENABLED)
+
+    # ── 2. Backend selection ─────────────────────────────────────
     registry = get_registry()
-
-    # Parse backend type
     try:
         backend_type = BackendType(backend)
     except ValueError:
         backend_type = BackendType.AUTO
 
-    # Select backend
     if backend_type == BackendType.AUTO:
         backend_instance = registry.select_best(format)
     else:
@@ -1250,173 +673,367 @@ async def process_text_file(
     if backend_instance is None:
         backend_instance = registry.get(BackendType.SIMPLE)
 
-    # Validate that the selected backend supports the format
     if not backend_instance.supports_format(format):
-        raise ValueError(f"Backend '{backend_instance.name}' does not support format '{format}'")
+        raise ValueError(
+            f"Backend '{backend_instance.name}' does not support format '{format}'"
+        )
 
     warnings = []
     if backend_instance.warning:
         warnings.append(backend_instance.warning)
 
+    # ── 3. Plan chunks (segmenter integration) ───────────────────
+    chunks = _plan_chunks(
+        file_path=file_path,
+        format=format,
+        backend_name=backend_instance.name,
+        chapter_split=chapter_split,
+        start_page=start_page,
+        end_page=end_page,
+    )
+
+    # ── 4. Create output directory ───────────────────────────────
+    output_manager = OutputManager()
+    output_path = output_manager.create_output_dir(file_path)
+    images_dir = output_path / "images"
+
+    # ── 5. Build backend kwargs ──────────────────────────────────
+    backend_kwargs: dict[str, Any] = {}
+    if format == "pdf":
+        backend_kwargs["extract_images"] = extract_images
+        backend_kwargs["images_output_dir"] = str(images_dir)
+        backend_kwargs["render_images"] = render_images
+        backend_kwargs["render_dpi"] = render_dpi
+        backend_kwargs["render_format"] = render_format
+        backend_kwargs["extract_forms"] = extract_forms
+        backend_kwargs["inspect_struct"] = inspect_struct
+        backend_kwargs["include_coords"] = include_coords
+
+    # ── 6. Process ───────────────────────────────────────────────
     try:
-        # Create output directory
-        output_manager = OutputManager(base_dir=Path(output_dir) if output_dir else None)
-        output_path = output_manager.create_output_dir(file_path)
+        if len(chunks) == 1:
+            # Single-chunk: process in-place (same as before)
+            result = _process_and_save(
+                file_path=file_path,
+                backend=backend_instance,
+                format=format,
+                output_path=output_path,
+                images_dir=images_dir,
+                chunk=chunks[0],
+                backend_kwargs=backend_kwargs,
+            )
+            result["success"] = True
+            result["backend_used"] = backend_instance.name
+            result["output_directory"] = str(output_path)
+            result["files"] = {
+                "intermediate_json": str(result["intermediate_path"]),
+                "markdown": str(result["markdown_path"]),
+                "index_json": str(result["index_path"]),
+            }
+            if "image_files" in result:
+                result["files"]["images"] = str(result["image_files"][0].parent)
+                result["image_count"] = len(result["image_files"])
+            if warnings:
+                result["warnings"] = warnings
+            return result
 
-        # Process with backend
-        file_path_obj = Path(file_path)
-        intermediate = backend_instance.process(file_path_obj, format)
+        # Multi-chunk: process each chunk independently, then merge
+        chunk_results: list[dict[str, Any]] = []
+        for idx, chunk in enumerate(chunks):
+            chunk_dir = output_path / f"chunk_{idx + 1:04d}"
+            chunk_dir.mkdir(exist_ok=True)
+            try:
+                cr = _process_and_save(
+                    file_path=file_path,
+                    backend=backend_instance,
+                    format=format,
+                    output_path=chunk_dir,
+                    images_dir=chunk_dir / "images",
+                    chunk=chunk,
+                    backend_kwargs=backend_kwargs,
+                )
+                chunk_results.append(cr)
+            except Exception as e:
+                logger.error("Chunk %d (%s) failed: %s", idx + 1, chunk.title, e)
+                chunk_results.append({
+                    "error": str(e),
+                    "title": chunk.title,
+                    "phys_start": chunk.phys_start,
+                    "phys_end": chunk.phys_end,
+                })
 
-        # Save intermediate JSON
-        intermediate_path = output_manager.get_output_path(output_path, "intermediate.json")
-        import json
-        with open(intermediate_path, 'w', encoding='utf-8') as f:
-            json.dump(intermediate, f, ensure_ascii=False, indent=2)
+        # Merge and save structural TOC
+        _save_structural_toc(output_path, chunks)
 
-        # Convert to markdown
-        markdown_converter = MarkdownConverter(intermediate)
-        markdown_content = markdown_converter.convert()
-        markdown_path = output_manager.get_output_path(output_path, "output.md")
-        with open(markdown_path, 'w', encoding='utf-8') as f:
-            f.write(markdown_content)
+        # Merge chunk markdowns into a single output.md
+        merged_md = _merge_chunk_markdowns(chunk_results)
+        if merged_md:
+            merged_md_path = output_path / "output.md"
+            with open(merged_md_path, 'w', encoding='utf-8') as f:
+                f.write(merged_md)
 
-        # Save index
-        index_generator = IndexGenerator(intermediate)
-        index_path = output_manager.get_output_path(output_path, "index.json")
-        index_generator.save_to_file(str(index_path))
+        succeeded = [cr for cr in chunk_results if "error" not in cr]
+        chunk_files = []
+        for cr in chunk_results:
+            info = {"title": cr.get("title", ""), "phys_start": cr.get("phys_start"), "phys_end": cr.get("phys_end")}
+            if "error" in cr:
+                info["error"] = cr["error"]
+            else:
+                info["intermediate_json"] = str(cr["intermediate_path"])
+                info["markdown"] = str(cr["markdown_path"])
+            chunk_files.append(info)
 
         return {
             "success": True,
             "output_directory": str(output_path),
             "backend_used": backend_instance.name,
-            "warnings": warnings,
+            "chunk_count": len(chunks),
             "files": {
-                "intermediate_json": str(intermediate_path),
-                "markdown": str(markdown_path),
-                "index_json": str(index_path)
-            }
+                "chunks": chunk_files,
+                "structural_toc": str(output_path / "structural_toc.json") if (output_path / "structural_toc.json").exists() else None,
+                "merged_markdown": str(merged_md_path) if merged_md else None,
+            },
+            "warnings": warnings,
         }
+
     except Exception as e:
-        logger.error(f"Processing failed: {e}")
+        logger.error("Processing failed: %s", e)
         return {
             "success": False,
             "error": str(e),
             "backend_used": backend_instance.name,
-            "warnings": warnings
         }
 
 
-@mcp.tool()
-async def process_binary_file(
+# ── Chunk planning ─────────────────────────────────────────────────
+
+
+def _plan_chunks(
     file_path: str,
-    format: str | None = None,
-    output_dir: str | None = None,
-    extract_images: bool | None = None,
-    backend: str = "auto"
-) -> dict[str, Any]:
-    """Process binary/document files and save results to output directory.
+    format: str,
+    backend_name: str,
+    chapter_split: bool | str | int,
+    start_page: int | None,
+    end_page: int | None,
+) -> list[Any]:
+    """Determine processing chunks for the given document.
 
-    Supported formats: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .html, .htm, .zip
-
-    Args:
-        file_path: Path to the file to read
-        format: Explicit format override
-        output_dir: Directory to save output files (defaults to .local_read_mcp in current directory)
-        extract_images: Extract images from PDF (auto-enabled if vision is configured)
-        backend: Backend to use (auto, simple)
-
-    Returns:
-        Dictionary with paths to generated files
+    Returns a list of Chunk objects (from the segmenter module).
+    A single-element list means no splitting.
     """
-    # Detect format if not specified
-    if format is None:
-        format = detect_format(file_path) or "pdf"
+    from ..segmenter import Chunk, ChunkPlanner, TocExtractor  # noqa: PLC0415
 
-    # Map format to backend format names
-    format_mapping = {
-        "pdf": "pdf",
-        "word": "word",
-        "excel": "excel",
-        "ppt": "ppt",
-        "html": "html",
-        "zip": "zip"
-    }
-    backend_format = format_mapping.get(format, format)
+    # No splitting requested
+    if chapter_split is False or chapter_split is None:
+        return [Chunk(phys_start=start_page or 0, phys_end=end_page or 2**31 - 1)]
 
-    # Get backend
-    registry = get_registry()
+    # Only PDF + layout-capable backend triggers the segmenter
+    if format != "pdf":
+        return [Chunk(phys_start=start_page or 0, phys_end=end_page or 2**31 - 1)]
 
-    # Parse backend type
+    # Load document for page count and chapter detection
     try:
-        backend_type = BackendType(backend)
-    except ValueError:
-        backend_type = BackendType.AUTO
-
-    # Select backend
-    if backend_type == BackendType.AUTO:
-        backend_instance = registry.select_best(backend_format)
-    else:
-        backend_instance = registry.get(backend_type)
-
-    if backend_instance is None:
-        backend_instance = registry.get(BackendType.SIMPLE)
-
-    # Validate that the selected backend supports the format
-    if not backend_instance.supports_format(backend_format):
-        raise ValueError(f"Backend '{backend_instance.name}' does not support format '{backend_format}'")
-
-    warnings = []
-    if backend_instance.warning:
-        warnings.append(backend_instance.warning)
+        import fitz  # noqa: PLC0415
+    except ImportError:
+        logger.warning("PyMuPDF not available, cannot detect chapters")
+        return [Chunk(phys_start=start_page or 0, phys_end=end_page or 2**31 - 1)]
 
     try:
-        # Create output directory
-        output_manager = OutputManager(base_dir=Path(output_dir) if output_dir else None)
-        output_path = output_manager.create_output_dir(file_path)
-        images_dir = output_path / "images"
-
-        # Process with backend
-        file_path_obj = Path(file_path)
-        intermediate = backend_instance.process(file_path_obj, backend_format, extract_images=extract_images, images_output_dir=str(images_dir))
-
-        # Save intermediate JSON
-        intermediate_path = output_manager.get_output_path(output_path, "intermediate.json")
-        import json
-        with open(intermediate_path, 'w', encoding='utf-8') as f:
-            json.dump(intermediate, f, ensure_ascii=False, indent=2)
-
-        # Convert to markdown
-        markdown_converter = MarkdownConverter(intermediate)
-        markdown_content = markdown_converter.convert()
-        markdown_path = output_manager.get_output_path(output_path, "output.md")
-        with open(markdown_path, 'w', encoding='utf-8') as f:
-            f.write(markdown_content)
-
-        # Save index
-        index_generator = IndexGenerator(intermediate)
-        index_path = output_manager.get_output_path(output_path, "index.json")
-        index_generator.save_to_file(str(index_path))
-
-        return {
-            "success": True,
-            "output_directory": str(output_path),
-            "backend_used": backend_instance.name,
-            "warnings": warnings,
-            "files": {
-                "intermediate_json": str(intermediate_path),
-                "markdown": str(markdown_path),
-                "index_json": str(index_path),
-                "images": str(images_dir) if extract_images and images_dir.exists() else None
-            }
-        }
+        doc = fitz.open(file_path)
     except Exception as e:
-        logger.error(f"Processing failed: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "backend_used": backend_instance.name,
-            "warnings": warnings
-        }
+        logger.warning("Cannot open PDF for chapter detection: %s, processing whole file", e)
+        s = start_page or 0
+        e = end_page or 2**31 - 1
+        return [Chunk(phys_start=s, phys_end=e)]
+
+    total = doc.page_count
+
+    # Determine if splitting is worthwhile
+    need_split = False
+    split_type: str | int = "auto"
+    if isinstance(chapter_split, str) and chapter_split == "auto":
+        need_split = total > 30
+        split_type = "auto"
+    elif isinstance(chapter_split, str) and chapter_split in ("chapter", "section"):
+        need_split = True
+        split_type = chapter_split
+    elif isinstance(chapter_split, int):
+        need_split = True
+        split_type = chapter_split
+
+    if not need_split:
+        doc.close()
+        s = start_page or 0
+        e = min(end_page or total - 1, total - 1)
+        return [Chunk(phys_start=s, phys_end=e)]
+
+    # Run segmenter
+    try:
+        extractor = TocExtractor()
+        chapters = extractor.extract(doc)
+        planner = ChunkPlanner(overlap=2)
+
+        if chapters:
+            raw_chunks = planner.plan_from_chapters(chapters, total_pages=total)
+        elif isinstance(split_type, int):
+            raw_chunks = planner.plan_fixed(total, chunk_size=split_type)
+        else:
+            raw_chunks = planner.plan_fixed(total, chunk_size=20)
+
+        doc.close()
+    except Exception as e:
+        logger.warning("Chapter detection failed: %s, falling back to fixed chunks", e)
+        doc.close()
+        planner = ChunkPlanner()
+        raw_chunks = planner.plan_fixed(total, chunk_size=20)
+
+    # Apply start_page / end_page bounds
+    if start_page is not None or end_page is not None:
+        bounded: list[Any] = []
+        for c in raw_chunks:
+            s = c.phys_start
+            e = c.phys_end
+            if start_page is not None:
+                s = max(s, start_page)
+            if end_page is not None:
+                e = min(e, end_page)
+            if s <= e:
+                bounded.append(Chunk(phys_start=s, phys_end=e, title=c.title, level=c.level, batch_size=c.batch_size))
+        return bounded
+
+    return raw_chunks
+
+
+# ── Single-chunk processing + save ─────────────────────────────────
+
+
+def _process_and_save(
+    file_path: str,
+    backend,
+    format: str,
+    output_path: Path,
+    images_dir: Path,
+    chunk: Any,
+    backend_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Process one chunk through the backend and save all outputs."""
+    import json  # noqa: PLC0415
+
+    # For PDF page-range chunks, slice the PDF into a temp file
+    # so the backend receives a PDF that starts at page 0.
+    if format == "pdf":
+        import fitz  # noqa: PLC0415
+
+        try:
+            src = fitz.open(file_path)
+        except Exception:
+            # Not a real PDF — pass the file as-is, let the backend handle it
+            sliced_path = Path(file_path)
+        else:
+            import tempfile  # noqa: PLC0415
+            total = src.page_count
+            p_start = max(0, min(chunk.phys_start, total - 1))
+            p_end = max(p_start, min(chunk.phys_end, total - 1))
+
+            if p_start == 0 and p_end >= total - 1:
+                sliced_path = Path(file_path)
+                src.close()
+            else:
+                sliced = fitz.open()
+                sliced.insert_pdf(src, from_page=p_start, to_page=p_end)
+                if images_dir:
+                    images_dir.mkdir(parents=True, exist_ok=True)
+                tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=".pdf", dir=str(images_dir.parent) if images_dir else None)
+                os.close(tmp_fd)
+                sliced.save(tmp_path_str)
+                sliced.close()
+                sliced_path = Path(tmp_path_str)
+                src.close()
+    else:
+        sliced_path = Path(file_path)
+
+    try:
+        intermediate = backend.process(sliced_path, format, **backend_kwargs)
+    finally:
+        # Clean up temp slice if created
+        if format == "pdf" and sliced_path != Path(file_path) and sliced_path.exists():
+            sliced_path.unlink(missing_ok=True)
+
+    # Save intermediate.json
+    intermediate_path = output_path / "intermediate.json"
+    with open(intermediate_path, 'w', encoding='utf-8') as f:
+        json.dump(intermediate, f, ensure_ascii=False, indent=2)
+
+    # Save output.md
+    markdown_converter = MarkdownConverter(intermediate)
+    markdown_content = markdown_converter.convert()
+    markdown_path = output_path / "output.md"
+    with open(markdown_path, 'w', encoding='utf-8') as f:
+        f.write(markdown_content)
+
+    # Save index.json
+    index_generator = IndexGenerator(intermediate)
+    index_path = output_path / "index.json"
+    index_generator.save_to_file(str(index_path))
+
+    result: dict[str, Any] = {
+        "title": chunk.title if hasattr(chunk, 'title') else "",
+        "phys_start": chunk.phys_start if hasattr(chunk, 'phys_start') else 0,
+        "phys_end": chunk.phys_end if hasattr(chunk, 'phys_end') else 0,
+        "intermediate_path": intermediate_path,
+        "markdown_path": markdown_path,
+        "index_path": index_path,
+        "intermediate": intermediate,
+        "markdown_content": markdown_content,
+    }
+
+    if images_dir.exists():
+        image_files = list(images_dir.iterdir())
+        if image_files:
+            result["image_files"] = image_files
+
+    return result
+
+
+# ── Merging helpers ────────────────────────────────────────────────
+
+
+def _merge_chunk_markdowns(chunk_results: list[dict[str, Any]]) -> str:
+    """Concatenate chunk markdowns with chapter separators."""
+    parts: list[str] = []
+    for cr in chunk_results:
+        if "error" in cr:
+            parts.append(
+                f"\n\n---\n## [{cr.get('title', 'error')}] (processing failed)\n\n"
+                f"Error: {cr['error']}\n"
+            )
+            continue
+        md = cr.get("markdown_content", "")
+        title = cr.get("title", "")
+        p_start = cr.get("phys_start", 0)
+        p_end = cr.get("phys_end", 0)
+        header = f"\n\n---\n# {title}  (pages {p_start + 1}–{p_end + 1})\n\n"
+        parts.append(header + md)
+    return "\n".join(parts).strip()
+
+
+def _save_structural_toc(output_path: Path, chunks: list[Any]) -> None:
+    """Save the structural table of contents as JSON."""
+    import json  # noqa: PLC0415
+
+    toc_data = []
+    for idx, c in enumerate(chunks):
+        toc_data.append({
+            "chunk_index": idx + 1,
+            "title": getattr(c, "title", ""),
+            "level": getattr(c, "level", 1),
+            "phys_start": getattr(c, "phys_start", 0),
+            "phys_end": getattr(c, "phys_end", 0),
+        })
+
+    toc_path = output_path / "structural_toc.json"
+    with open(toc_path, 'w', encoding='utf-8') as f:
+        json.dump(toc_data, f, ensure_ascii=False, indent=2)
 
 
 def main():

@@ -23,7 +23,7 @@ from ..converters import (
     ZipConverter,
 )
 from ..intermediate_json import IntermediateJSONBuilder
-from .base import DocumentBackend, DEFAULT_BBOX
+from .base import DEFAULT_BBOX, DocumentBackend
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +76,17 @@ class SimpleBackend(DocumentBackend):
             markdown_content = MarkItDownConverter(str(file_path)).text_content
             result = None
 
-        # Get page count from result if available
+        # Prefer explicit converter pagination; fall back to metadata when available.
         page_count = 1
         if result and hasattr(result, 'pagination_info'):
             page_count = result.pagination_info.get('page_count', 1)
+        if (
+            result
+            and page_count == 1
+            and hasattr(result, 'metadata')
+            and isinstance(result.metadata, dict)
+        ):
+            page_count = result.metadata.get('pdf_page_count') or result.metadata.get('page_count', 1)
 
         # Create builder
         builder = IntermediateJSONBuilder(

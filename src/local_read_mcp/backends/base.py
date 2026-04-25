@@ -20,9 +20,7 @@ class BackendType(Enum):
     """Supported backend types."""
     AUTO = "auto"
     SIMPLE = "simple"
-    MINERU = "mineru"
-    QWEN_VL = "qwen-vl"
-    OPENAI_VLM = "openai-vlm"
+    VLM_HYBRID = "vlm-hybrid"
 
 
 class DocumentBackend(ABC):
@@ -125,11 +123,9 @@ class BackendRegistry:
         Returns:
             The best available backend
         """
-        # Try in order: mineru -> qwen-vl -> openai-vlm -> simple
+        # Try in order: vlm-hybrid -> simple
         priority_order = [
-            BackendType.MINERU,
-            BackendType.QWEN_VL,
-            BackendType.OPENAI_VLM,
+            BackendType.VLM_HYBRID,
             BackendType.SIMPLE
         ]
 
@@ -165,24 +161,12 @@ def register_simple_backend():
     registry.register(BackendType.SIMPLE, SimpleBackend)
 
 
-def register_mineru_backend():
-    """Register MinerUBackend - called after MinerUBackend is defined."""
+def register_vlm_hybrid_backend():
+    """Register VlmHybridBackend - called after VlmHybridBackend is defined."""
     registry = get_registry()
     try:
-        from .mineru import MinerUBackend
-        registry.register(BackendType.MINERU, MinerUBackend)
+        from .mineru import VlmHybridBackend
+        registry.register(BackendType.VLM_HYBRID, VlmHybridBackend)
     except ImportError:
         # MinerU optional dependency not installed
-        pass
-
-
-def register_vlm_backends():
-    """Register VLM backends - called after VLM backends are defined."""
-    registry = get_registry()
-    try:
-        from .vlm import OpenAIVLBackend, QwenVLBackend
-        registry.register(BackendType.OPENAI_VLM, OpenAIVLBackend)
-        registry.register(BackendType.QWEN_VL, QwenVLBackend)
-    except ImportError:
-        # VLM dependencies might not be installed
         pass

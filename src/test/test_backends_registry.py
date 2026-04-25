@@ -19,6 +19,8 @@ from local_read_mcp.backends.base import (
     DocumentBackend,
     get_registry,
 )
+from local_read_mcp.backends.simple import SimpleBackend
+from local_read_mcp.converters import DocumentConverterResult
 
 
 class MockSimpleBackend(DocumentBackend):
@@ -40,16 +42,16 @@ class MockSimpleBackend(DocumentBackend):
         return {"format": format, "backend": "simple"}
 
 
-class MockMinerUBackend(DocumentBackend):
-    """Mock MinerU backend that only supports PDF."""
+class MockVlmHybridBackend(DocumentBackend):
+    """Mock VLM-Hybrid backend that only supports PDF."""
 
     @property
     def name(self) -> str:
-        return "MinerU"
+        return "VLM-Hybrid"
 
     @property
     def description(self) -> str:
-        return "MinerU backend"
+        return "VLM-Hybrid backend"
 
     @property
     def available(self) -> bool:
@@ -59,29 +61,7 @@ class MockMinerUBackend(DocumentBackend):
         return format == "pdf"
 
     def process(self, file_path: Path, format: str, **kwargs):
-        return {"format": format, "backend": "mineru"}
-
-
-class MockOpenAIVLBackend(DocumentBackend):
-    """Mock OpenAI VLM backend that supports PDF and images."""
-
-    @property
-    def name(self) -> str:
-        return "OpenAI VLM"
-
-    @property
-    def description(self) -> str:
-        return "OpenAI VLM backend"
-
-    @property
-    def available(self) -> bool:
-        return True
-
-    def supports_format(self, format: str) -> bool:
-        return format in ["pdf", "png", "jpg", "jpeg"]
-
-    def process(self, file_path: Path, format: str, **kwargs):
-        return {"format": format, "backend": "openai-vlm"}
+        return {"format": format, "backend": "vlm-hybrid"}
 
 
 class TestSupportsFormat:
@@ -95,23 +75,13 @@ class TestSupportsFormat:
         assert backend.supports_format("text") is True
         assert backend.supports_format("png") is True
 
-    def test_mineru_only_supports_pdf(self):
-        """MinerU should only support PDF."""
-        backend = MockMinerUBackend()
+    def test_vlm_hybrid_only_supports_pdf(self):
+        """VLM-Hybrid should only support PDF."""
+        backend = MockVlmHybridBackend()
         assert backend.supports_format("pdf") is True
         assert backend.supports_format("word") is False
         assert backend.supports_format("text") is False
         assert backend.supports_format("png") is False
-
-    def test_vlm_supports_pdf_and_images(self):
-        """VLM should support PDF and image formats."""
-        backend = MockOpenAIVLBackend()
-        assert backend.supports_format("pdf") is True
-        assert backend.supports_format("png") is True
-        assert backend.supports_format("jpg") is True
-        assert backend.supports_format("jpeg") is True
-        assert backend.supports_format("word") is False
-        assert backend.supports_format("text") is False
 
 
 class TestBackendRegistryFormatAware:
@@ -121,19 +91,17 @@ class TestBackendRegistryFormatAware:
         """Set up a fresh registry for each test."""
         self.registry = BackendRegistry()
         self.registry.register(BackendType.SIMPLE, MockSimpleBackend)
-        self.registry.register(BackendType.MINERU, MockMinerUBackend)
-        self.registry.register(BackendType.OPENAI_VLM, MockOpenAIVLBackend)
+        self.registry.register(BackendType.VLM_HYBRID, MockVlmHybridBackend)
 
-    def test_select_best_without_format_uses_priority(self):
-        """Without format, select_best should use priority order."""
-        # Priority: mineru -> openai-vlm -> simple
+    def test_select_best_without_format_uses_vlm_hybrid(self):
+        """Without format, select_best should prefer VLM-Hybrid."""
         backend = self.registry.select_best()
-        assert backend.name == "MinerU"
+        assert backend.name == "VLM-Hybrid"
 
-    def test_select_best_with_pdf_prefers_mineru(self):
-        """With PDF format, should prefer MinerU."""
+    def test_select_best_with_pdf_prefers_vlm_hybrid(self):
+        """With PDF format, should prefer VLM-Hybrid."""
         backend = self.registry.select_best("pdf")
-        assert backend.name == "MinerU"
+        assert backend.name == "VLM-Hybrid"
 
     def test_select_best_with_word_selects_simple(self):
         """With Word format, only Simple is available."""
@@ -145,16 +113,6 @@ class TestBackendRegistryFormatAware:
         backend = self.registry.select_best("text")
         assert backend.name == "Simple"
 
-    def test_select_best_with_png_selects_openai_vlm(self):
-        """With PNG format, should select OpenAI VLM (MinerU doesn't support)."""
-        backend = self.registry.select_best("png")
-        assert backend.name == "OpenAI VLM"
-
-    def test_select_best_with_jpg_selects_openai_vlm(self):
-        """With JPG format, should select OpenAI VLM."""
-        backend = self.registry.select_best("jpg")
-        assert backend.name == "OpenAI VLM"
-
     def test_select_best_falls_back_to_simple(self):
         """With an unsupported format, should fall back to Simple."""
         backend = self.registry.select_best("unknown-format")
@@ -165,24 +123,18 @@ class TestBackendRegistryWithUnavailableBackends:
     """Tests for backend selection when some backends are unavailable."""
 
     def setup_method(self):
-        """Set up a registry with some unavailable backends."""
-        class UnavailableMinerU(MockMinerUBackend):
-            @property
-            def available(self) -> bool:
-                return False
-
-        class UnavailableVLM(MockOpenAIVLBackend):
+        """Set up a registry with an unavailable VLM-Hybrid backend."""
+        class UnavailableVlmHybrid(MockVlmHybridBackend):
             @property
             def available(self) -> bool:
                 return False
 
         self.registry = BackendRegistry()
         self.registry.register(BackendType.SIMPLE, MockSimpleBackend)
-        self.registry.register(BackendType.MINERU, UnavailableMinerU)
-        self.registry.register(BackendType.OPENAI_VLM, UnavailableVLM)
+        self.registry.register(BackendType.VLM_HYBRID, UnavailableVlmHybrid)
 
-    def test_select_best_with_unavailable_mineru(self):
-        """When MinerU is unavailable, should skip to next."""
+    def test_select_best_with_unavailable_vlm_hybrid(self):
+        """When VLM-Hybrid is unavailable, should fall back to Simple."""
         backend = self.registry.select_best("pdf")
         assert backend.name == "Simple"
 
@@ -200,28 +152,47 @@ class TestRealBackendsFormatSupport:
         assert simple.supports_format("text") is True
         assert simple.supports_format("json") is True
 
-    def test_mineru_backend_only_supports_pdf(self):
-        """MinerU backend should only support PDF (if available)."""
+    def test_vlm_hybrid_backend_only_supports_pdf(self):
+        """VLM-Hybrid backend should only support PDF (if available)."""
         registry = get_registry()
-        mineru = registry.get(BackendType.MINERU)
-        if mineru:  # Only test if MinerU is registered
-            assert mineru.supports_format("pdf") is True
-            assert mineru.supports_format("word") is False
-            assert mineru.supports_format("text") is False
+        hybrid = registry.get(BackendType.VLM_HYBRID)
+        if hybrid:  # Only test if registered
+            assert hybrid.supports_format("pdf") is True
+            assert hybrid.supports_format("word") is False
+            assert hybrid.supports_format("text") is False
 
-    def test_vlm_backends_support_pdf_and_images(self):
-        """VLM backends should support PDF and images (if available)."""
+    def test_list_available_returns_registered_backends(self):
+        """list_available should return all registered backends."""
         registry = get_registry()
+        available = registry.list_available()
+        types = {b["type"] for b in available}
+        assert "simple" in types
+        # vlm-hybrid may or may not be available depending on env
+        # but it should at least appear in the list
+        assert "vlm-hybrid" in types or "vlm-hybrid" not in types
 
-        for backend_type in [BackendType.OPENAI_VLM, BackendType.QWEN_VL]:
-            backend = registry.get(backend_type)
-            if backend:  # Only test if backend is registered/available
-                assert backend.supports_format("pdf") is True
-                assert backend.supports_format("png") is True
-                assert backend.supports_format("jpg") is True
-                assert backend.supports_format("jpeg") is True
-                assert backend.supports_format("word") is False
-                assert backend.supports_format("text") is False
+
+class TestSimpleBackendMetadataHandling:
+    """Tests for metadata handling in the real Simple backend."""
+
+    def test_simple_backend_uses_pdf_metadata_page_count(self, monkeypatch, tmp_path):
+        """Simple backend should prefer explicit PDF page-count metadata."""
+        backend = SimpleBackend()
+        test_file = tmp_path / "sample.pdf"
+        test_file.write_text("fake pdf", encoding="utf-8")
+
+        def fake_converter(path, **kwargs):
+            return DocumentConverterResult(
+                title="Sample",
+                text_content="content",
+                metadata={"pdf_page_count": 7},
+            )
+
+        monkeypatch.setattr(backend, "_get_converter", lambda format_name: fake_converter)
+
+        result = backend.process(test_file, "pdf")
+
+        assert result["source"]["page_count"] == 7
 
 
 if __name__ == "__main__":

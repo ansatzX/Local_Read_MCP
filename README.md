@@ -1,96 +1,97 @@
 # Local Read MCP Server
 
-Model Context Protocol server for local document processing with vision support.
+MCP server for local document processing — structured extraction from PDFs, Office, images, and code. Designed to complement an agent's built-in Read tool, not duplicate it.
 
-## 设计理念 / Design Philosophy
+## Tools
 
-### 核心原则
-
-1. **不与 agent 的内置 Read 工具竞争，而是互补**
-   - Agent 的内置 Read 用于轻量读取（plain text, images）
-   - `process_binary_file` 用于转换二进制文档到结构化格式
-   - `query_processed_document` 用于查询已转换的结构化数据
-
-2. **两工具架构**
-   ```
-   process_binary_file → intermediate.json → query_processed_document
-         ↓                    ↓                          ↓
-     转换引擎           结构化中间格式          结构化查询引擎
-   ```
-
-3. **工作流**
-   - 二进制文档：`process_binary_file` → 本地文件夹（intermediate.json + output.md + images/）
-   - Agent 用内置 Read 读取 `output.md` 和图片
-   - Agent 用 `query_processed_document` 做结构化查询
-
-4. **图片处理**
-   - Agent 内置 Read 能直接看图 → 直接用
-   - 不能看图 → `process_binary_file` 配 VLM backend → 输出图片描述
-   - 图片文件始终本地存储，agent 可调整 prompt 重新分析
-
-## Features
-
-- **Multi-format Support**: PDF, Word, Excel, PowerPoint, HTML, Text, JSON, CSV, YAML, ZIP
-- **Local Processing**: No cloud services required
-- **Vision Analysis**: OpenAI-compatible API support (Doubao, GPT-4o, etc.)
-- **MinerU Integration**: Optional high-quality PDF parsing
-- **Markdown Output**: All formats convert to readable markdown
+| Tool | When to use |
+|------|-------------|
+| `process_binary_file` | **MUST** for any non-text file before reading. Converts to structured output and saves to `.local_read_mcp/`. |
+| `analyze_image` | Analyze images via Vision API (Doubao, GPT-4o, etc.). Result saved to `.local_read_mcp/analysis/`. |
+| `get_vision_status` | Check if Vision API is configured. |
 
 ## Quick Start
-
-### Installation
 
 ```bash
 git clone https://github.com/ansatzX/Local_Read_MCP.git
 cd Local_Read_MCP
 
-uv venv .venv
-source .venv/bin/activate
-
+uv venv .venv && source .venv/bin/activate
 uv pip install -e .
-uv pip install -e ".[mineru]"  # Optional: MinerU PDF parsing
 ```
 
-### Claude Code Setup
-
-Edit `~/.claude/settings.json`:
+Configure MCP in `~/.claude/settings.json`:
 
 ```json
 {
-  "mcpServers": [
-    {
-      "command": "uv",
-      "args": [
-        "--directory", "/path/to/Local_Read_MCP",
-        "run", "--with", "local_read_mcp",
-        "python", "-m", "local_read_mcp.server"
-      ]
-    }
-  ]
+  "mcpServers": [{
+    "command": "uv",
+    "args": ["--directory", "/path/to/Local_Read_MCP", "run", "python", "-m", "local_read_mcp.server"]
+  }]
 }
 ```
 
-## Available Tools
+## Vision API (Optional)
 
-| Tool                    | Description                       |
-| ------------------------ | --------------------------------- |
-| `read_text_file`         | Read text-based files            |
-| `read_binary_file`       | Read binary/document files        |
-| `process_text_file`      | Process text files & save to disk|
-| `process_binary_file`    | Process binary files & save to disk|
-| `analyze_image`          | Analyze images with vision API  |
-| `get_vision_status`      | Check vision configuration       |
-| `cleanup_temp_files`     | Clean up temporary files         |
-| `get_supported_formats`  | List all supported formats        |
+Create `.env`:
+
+```
+VISION_API_KEY=sk-xxx
+VISION_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+VISION_MODEL=doubao-seed-1-8-251228
+```
+
+## MinerU VLM-HYBRID Backend (Optional)
+
+For high-quality PDF parsing with layout analysis, formula recognition, and table detection:
+
+```bash
+pip install "local-read-mcp[mineru]"
+
+# Download models into the project directory
+mineru-models-download --models-dir ./models
+
+# Configure model paths
+cp mineru.json.template mineru.json
+# Edit mineru.json if models are elsewhere
+```
+
+Models downloaded (~4.5GB total):
+- `models/pipeline/` — layout detection, OCR, formula recognition, table structure
+- `models/vlm/` — fine-tuned Qwen2-VL for document understanding
+
+## How It Works
+
+```
+process_binary_file(file.pdf)
+  ├─ format detection → backend selection
+  │
+  ├─ SIMPLE (zero-dependency, all formats)
+  │   └─ Built-in converters: PyMuPDF / mammoth / openpyxl / python-pptx
+  │
+  ├─ VLM-HYBRID (MinerU required, PDF only)
+  │   └─ MinerU hybrid-auto-engine: VLM layout + pipeline OCR/formula/table
+  │
+  └─ chapter_split (auto for large PDFs)
+      ├─ Detect sections via TOC / heading scan / fixed chunks
+      ├─ Process each chunk independently (with page overlap)
+      └─ Merge output.md + structural_toc.json
+```
+
+All results saved to `.local_read_mcp/<file>_<timestamp>/`:
+- `intermediate.json` — structured block representation
+- `output.md` — converted markdown
+- `index.json` — section/table/figure index
+- `images/` — extracted images (when requested)
 
 ## Development
 
 ```bash
-uv run pytest -q          # Run tests
-uv run ruff format .      # Format code
-uv run ruff check .       # Lint code
+uv run pytest          # 136 tests
+uv run ruff format .   # Format code
+uv run ruff check .    # Lint
 ```
 
 ## License
 
-MIT License
+MIT

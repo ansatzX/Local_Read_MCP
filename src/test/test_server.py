@@ -1,8 +1,7 @@
 """
 Unit tests for MCP server tools.
 
-This module contains tests for the FastMCP server implementation,
-including tests for all document reading tools and helper functions.
+This module contains tests for the FastMCP server implementation.
 """
 
 
@@ -247,23 +246,6 @@ class TestProcessDocument:
         assert "error" in result
 
 
-class TestServerIntegration:
-    """Integration tests for the server."""
-
-    @pytest.mark.asyncio
-    async def test_get_supported_formats(self):
-        """Test get_supported_formats tool returns correct structure."""
-        result = await server_app.get_supported_formats.fn()
-
-        assert "text_formats" in result
-        assert "binary_formats" in result
-        assert "tools" in result
-        assert "notes" in result
-        assert "migration_guide" not in result
-        assert result["tools"]["main"] == ["read_text_file", "read_binary_file"]
-        assert result["tools"]["auxiliary"] == ["analyze_image", "get_vision_status", "cleanup_temp_files"]
-
-
 class TestProcessPdfDocument:
     """Regression tests for process_pdf_document."""
 
@@ -308,155 +290,106 @@ class TestProcessPdfDocument:
         assert result["total_chars"] == len("PDF content")
 
 
-class TestConverterWrapperCaching:
-    """Tests for backend selection and processing (previously converter wrapper caching)."""
+class TestProcessBinaryFileExtractImagesDefault:
+    """Tests for extract_images default behavior in process_binary_file."""
 
     @pytest.mark.asyncio
-    async def test_read_text_file_works_with_backend(self, monkeypatch, tmp_path):
-        """read_text_file should work with backend path (now default)."""
-        test_file = tmp_path / "sample.txt"
-        test_file.write_text("hello world", encoding="utf-8")
-
-        # Just verify it works - default backend should work fine
-        result = await server_app.read_text_file.fn(
-            file_path=str(test_file),
-            format="text"
-        )
-
-        assert result.get("success") is True
-
-
-class TestReadBinaryFileExtractImagesDefault:
-    """Tests for extract_images default behavior in read_binary_file."""
-
-    @pytest.mark.asyncio
-    async def test_auto_enable_extract_images_when_vision_enabled(self, monkeypatch):
-        """When not specified and vision is enabled, extract_images should auto-enable."""
+    async def test_auto_enable_extract_images_when_vision_enabled(self, monkeypatch, tmp_path):
+        """When not specified and vision is enabled, processing should extract images for PDFs."""
         called = {}
+        test_file = tmp_path / "sample.pdf"
+        test_file.write_text("fake pdf", encoding="utf-8")
 
-        async def fake_process_pdf_document(**kwargs):
-            called.update(kwargs)
-            return {"success": True}
+        class FakeBackend:
+            name = "Fake"
+            warning = None
 
-        monkeypatch.setattr(server_app, "process_pdf_document", fake_process_pdf_document)
+            def supports_format(self, format_name):
+                return True
+
+            def process(self, file_path, format_name, **kwargs):
+                called.update(kwargs)
+                return {
+                    "source": {"path": str(file_path), "format": format_name, "page_count": 1},
+                    "metadata": {},
+                    "blocks": {
+                        "block_00000000": {
+                            "type": "text",
+                            "page": 1,
+                            "bbox": [0, 0, 612, 792],
+                            "confidence": 0.9,
+                            "content": "content",
+                        }
+                    },
+                    "reading_order": ["block_00000000"],
+                }
+
+        class FakeRegistry:
+            def select_best(self, format_name=None):
+                return FakeBackend()
+
+            def get(self, backend_type):
+                return FakeBackend()
+
+        monkeypatch.setattr(server_app, "get_registry", lambda: FakeRegistry())
         monkeypatch.setattr(server_app, "VISION_ENABLED", True)
 
-        result = await server_app.read_binary_file.fn(file_path="/tmp/a.pdf", format="pdf")
+        result = await server_app.process_binary_file.fn(
+            file_path=str(test_file),
+            format="pdf",
+        )
 
         assert result["success"] is True
         assert called["extract_images"] is True
 
     @pytest.mark.asyncio
-    async def test_explicit_extract_images_false_is_respected(self, monkeypatch):
-        """Explicit extract_images=False should not be overridden."""
+    async def test_default_extract_images_false_when_vision_disabled(self, monkeypatch, tmp_path):
+        """When vision is disabled and not specified, processing should not extract images."""
         called = {}
+        test_file = tmp_path / "sample.pdf"
+        test_file.write_text("fake pdf", encoding="utf-8")
 
-        async def fake_process_pdf_document(**kwargs):
-            called.update(kwargs)
-            return {"success": True}
+        class FakeBackend:
+            name = "Fake"
+            warning = None
 
-        monkeypatch.setattr(server_app, "process_pdf_document", fake_process_pdf_document)
-        monkeypatch.setattr(server_app, "VISION_ENABLED", True)
+            def supports_format(self, format_name):
+                return True
 
-        result = await server_app.read_binary_file.fn(
-            file_path="/tmp/a.pdf",
+            def process(self, file_path, format_name, **kwargs):
+                called.update(kwargs)
+                return {
+                    "source": {"path": str(file_path), "format": format_name, "page_count": 1},
+                    "metadata": {},
+                    "blocks": {
+                        "block_00000000": {
+                            "type": "text",
+                            "page": 1,
+                            "bbox": [0, 0, 612, 792],
+                            "confidence": 0.9,
+                            "content": "content",
+                        }
+                    },
+                    "reading_order": ["block_00000000"],
+                }
+
+        class FakeRegistry:
+            def select_best(self, format_name=None):
+                return FakeBackend()
+
+            def get(self, backend_type):
+                return FakeBackend()
+
+        monkeypatch.setattr(server_app, "get_registry", lambda: FakeRegistry())
+        monkeypatch.setattr(server_app, "VISION_ENABLED", False)
+
+        result = await server_app.process_binary_file.fn(
+            file_path=str(test_file),
             format="pdf",
-            extract_images=False,
         )
 
         assert result["success"] is True
         assert called["extract_images"] is False
-
-    @pytest.mark.asyncio
-    async def test_default_extract_images_false_when_vision_disabled(self, monkeypatch):
-        """When vision is disabled and not specified, extract_images should be False."""
-        called = {}
-
-        async def fake_process_pdf_document(**kwargs):
-            called.update(kwargs)
-            return {"success": True}
-
-        monkeypatch.setattr(server_app, "process_pdf_document", fake_process_pdf_document)
-        monkeypatch.setattr(server_app, "VISION_ENABLED", False)
-
-        result = await server_app.read_binary_file.fn(file_path="/tmp/a.pdf", format="pdf")
-
-        assert result["success"] is True
-        assert called["extract_images"] is False
-
-
-class TestParameterExtractionHelpers:
-    """Tests for parameter extraction helper functions."""
-
-    def test_extract_common_read_params_basic(self):
-        """Helper should extract basic common read parameters."""
-        params = {
-            "file_path": "/tmp/a.txt",
-            "format": "text",
-            "chunk": 2,
-            "chunk_size": 5000,
-            "offset": None,
-            "limit": None,
-            "extract_sections": True,
-            "extract_tables": False,
-            "extract_metadata": True,
-            "preview_only": False,
-            "preview_lines": 50,
-            "session_id": "s1",
-            "return_format": "json",
-        }
-
-        common_params, fixed_params = server_app._extract_common_read_params("read_text_file", params)
-
-        assert common_params["file_path"] == "/tmp/a.txt"
-        assert common_params["format"] == "text"
-        assert common_params["chunk"] == 2
-        assert common_params["chunk_size"] == 5000
-        assert common_params["extract_sections"] is True
-        assert common_params["extract_metadata"] is True
-        assert common_params["return_format"] == "json"
-        assert fixed_params["file_path"] == "/tmp/a.txt"
-
-    def test_extract_common_read_params_applies_aliases(self):
-        """Helper should apply fix_tool_arguments aliases before extraction."""
-        params = {
-            "filepath": "/tmp/a.txt",
-            "page": 3,
-            "page_size": 2000,
-            "preview": True,
-            "metadata": True,
-            "sections": True,
-            "tables": True,
-            "return_format": "text",
-            "format": "text",
-            "offset": None,
-            "limit": None,
-            "preview_lines": 10,
-            "session_id": None,
-        }
-
-        common_params, _ = server_app._extract_common_read_params("read_text_file", params)
-
-        assert common_params["file_path"] == "/tmp/a.txt"
-        assert common_params["chunk"] == 3
-        assert common_params["chunk_size"] == 2000
-        assert common_params["preview_only"] is True
-        assert common_params["extract_metadata"] is True
-        assert common_params["extract_sections"] is True
-        assert common_params["extract_tables"] is True
-
-
-class TestFormatExtensionHelpers:
-    """Tests for format/extension helper functions."""
-
-    def test_build_supported_format_groups(self):
-        """Builder should generate text/binary groups from extension mapping."""
-        text_formats, binary_formats = server_app._build_supported_format_groups()
-
-        assert text_formats[0]["name"] == "Plain Text"
-        assert text_formats[0]["extensions"] == [".txt", ".md", ".py", ".sh", ".log", ".rst"]
-        assert any(item["name"] == "PDF" and item["extensions"] == [".pdf"] for item in binary_formats)
-        assert any(item["name"] == "Word" and item["extensions"] == [".docx", ".doc"] for item in binary_formats)
 
 
 if __name__ == "__main__":

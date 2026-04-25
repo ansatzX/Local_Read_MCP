@@ -6,22 +6,20 @@ using the Local Read MCP processing pipeline.
 """
 
 import argparse
+import asyncio
+import json
 import sys
 from pathlib import Path
-from typing import Optional
 
-from .output_manager import OutputManager
-from .index_generator import IndexGenerator
 from .markdown_converter import MarkdownConverter
-from .intermediate_json import IntermediateJSONBuilder
 
 
 def convert_file(
     input_path: str,
-    output_dir: Optional[str] = None,
+    output_dir: str | None = None,
     include_page_breaks: bool = True,
     include_metadata: bool = True,
-    verbose: bool = False
+    verbose: bool = False,
 ) -> int:
     """
     Convert a file using the Local Read MCP pipeline.
@@ -46,70 +44,56 @@ def convert_file(
         print(f"Processing: {input_path}")
 
     try:
-        # Create output directory
-        output_manager = OutputManager(base_dir=Path(output_dir) if output_dir else None)
-        output_path = output_manager.create_output_dir(input_path)
+        from .server import app as server_app
+
+        detected_format = server_app.detect_format(input_path)
+        resolved_format = detected_format or input_path_obj.suffix[1:].lower() or "unknown"
+
+        # Change to output directory if specified, so .local_read_mcp/ is created there
+        if output_dir:
+            original_cwd = Path.cwd()
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            import os
+            os.chdir(str(Path(output_dir).resolve()))
+
+        result = asyncio.run(
+            server_app.process_binary_file.fn(
+                file_path=input_path,
+                format=resolved_format,
+            )
+        )
+
+        # Restore original CWD if changed
+        if output_dir:
+            import os
+            os.chdir(str(original_cwd))
+
+        if not result.get("success"):
+            print(f"Error: {result.get('error', 'Processing failed')}", file=sys.stderr)
+            return 1
+
+        output_path = Path(result["output_directory"])
+        intermediate_path = Path(result["files"]["intermediate_json"])
+        markdown_path = Path(result["files"]["markdown"])
+        index_path = Path(result["files"]["index_json"])
+
+        if not include_page_breaks or not include_metadata:
+            with open(intermediate_path, encoding="utf-8") as handle:
+                intermediate = json.load(handle)
+
+            MarkdownConverter(
+                intermediate,
+                include_page_breaks=include_page_breaks,
+                include_metadata=include_metadata,
+            ).save_to_file(str(markdown_path))
 
         if verbose:
             print(f"Output directory: {output_path}")
-
-        # TODO: In a real implementation, we would use the appropriate converter
-        # to build the Intermediate JSON. For now, we'll create a placeholder.
-
-        # Create placeholder intermediate JSON
-        file_size = input_path_obj.stat().st_size
-        builder = IntermediateJSONBuilder(
-            source_path=input_path,
-            source_format=input_path_obj.suffix[1:] if input_path_obj.suffix else "unknown",
-            page_count=1,
-            file_size=file_size
-        )
-
-        # Try to extract some basic content for demonstration
-        # For text files, we'll read the content
-        if input_path_obj.suffix.lower() in ['.txt', '.md', '.py', '.sh', '.json', '.csv', '.yaml', '.yml']:
-            try:
-                with open(input_path_obj, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                builder.add_block(
-                    type="paragraph",
-                    page=1,
-                    bbox=[0, 0, 0, 0],
-                    content=content
-                )
-            except Exception as e:
-                if verbose:
-                    print(f"Warning: Could not read text content: {e}", file=sys.stderr)
-
-        intermediate = builder.build()
-
-        # Save intermediate JSON
-        intermediate_path = output_manager.get_output_path(output_path, "intermediate.json")
-        import json
-        with open(intermediate_path, 'w', encoding='utf-8') as f:
-            json.dump(intermediate, f, ensure_ascii=False, indent=2)
-
-        if verbose:
+            print(f"Backend: {result['backend_used']}")
+            for warning in result.get("warnings", []):
+                print(f"Warning: {warning}", file=sys.stderr)
             print(f"  Saved: {intermediate_path.name}")
-
-        # Generate and save index
-        index_generator = IndexGenerator(intermediate)
-        index_path = output_manager.get_output_path(output_path, "index.json")
-        index_generator.save_to_file(str(index_path))
-
-        if verbose:
             print(f"  Saved: {index_path.name}")
-
-        # Generate and save Markdown
-        markdown_converter = MarkdownConverter(
-            intermediate,
-            include_page_breaks=include_page_breaks,
-            include_metadata=include_metadata
-        )
-        markdown_path = output_manager.get_output_path(output_path, "output.md")
-        markdown_converter.save_to_file(str(markdown_path))
-
-        if verbose:
             print(f"  Saved: {markdown_path.name}")
 
         print(f"\nSuccess! Output saved to: {output_path}")
@@ -143,6 +127,7 @@ Examples:
 
     parser.add_argument(
         "input_file",
+        nargs="?",
         help="Path to the input file to convert"
     )
 
@@ -181,6 +166,9 @@ Examples:
         from . import __version__
         print(f"Local Read MCP v{__version__}")
         return 0
+
+    if not args.input_file:
+        parser.error("the following arguments are required: input_file")
 
     return convert_file(
         input_path=args.input_file,
