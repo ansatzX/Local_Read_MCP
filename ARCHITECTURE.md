@@ -6,7 +6,7 @@ Three MCP tools:
 
 | Tool | Purpose |
 |------|---------|
-| `process_binary_file` | **MUST** for any non-text file. Converts to structured output and saves to `.local_read_mcp/`. |
+| `process_binary_file` | Converts supported binary/document/archive files to structured output and saves to `.local_read_mcp/`. |
 | `analyze_image` | Vision API analysis of images, result saved to `.local_read_mcp/analysis/`. |
 | `get_vision_status` | Check if Vision API is configured. |
 
@@ -20,8 +20,8 @@ process_binary_file(file)
   ├─ format detection → BackendRegistry.select_best()
   │    priority: VLM_HYBRID > SIMPLE
   │
-  ├─ SIMPLE  (zero-dependency, all formats)
-  │   └─ Built-in converters: PyMuPDF, mammoth, openpyxl, python-pptx, etc.
+  ├─ SIMPLE  (local converters, no model/API dependency)
+  │   └─ Built-in converters + MarkItDown fallback: PyMuPDF, mammoth, openpyxl, python-pptx, etc.
   │
   ├─ VLM_HYBRID  (requires MinerU + models, PDF only)
   │   └─ MinerU hybrid-auto-engine
@@ -50,8 +50,8 @@ class BackendType(Enum):
     VLM_HYBRID = "vlm-hybrid"
 ```
 
-- **SIMPLE**: Always available, handles all formats. Uses built-in converters.
-- **VLM_HYBRID**: PDF only, requires MinerU + downloaded models. Calls `hybrid_analyze.doc_analyze()` directly — no callbacks, no tempdir I/O.
+- **SIMPLE**: Always available. Handles supported formats through built-in converters and the MarkItDown fallback.
+- **VLM_HYBRID**: PDF only, requires MinerU + downloaded models. Calls `hybrid_analyze.doc_analyze()` directly — no `do_parse` callback/tempdir pattern.
 - **Selection**: `VLM_HYBRID > SIMPLE` (by available + format support).
 
 ## Chapter Detection (`src/local_read_mcp/segmenter/`)
@@ -71,7 +71,7 @@ MinerU is an external dependency (`pip install local-read-mcp[mineru]`). Models 
 
 Calls MinerU APIs directly:
 - `hybrid_analyze.doc_analyze()` for VLM-HYBRID
-- Engine auto-selection by MinerU's `get_vlm_engine()`
+- Engine auto-selection is handled inside MinerU
 - Output converted from MinerU's `middle_json` to `IntermediateJSON`
 
 ## Configuration Files
@@ -87,7 +87,11 @@ Calls MinerU APIs directly:
 
 ```
 src/local_read_mcp/
-├── server/app.py           MCP tools + orchestration
+├── server/
+│   ├── app.py              MCP tools only (3 tools)
+│   ├── orchestrator.py     Chunk planning, processing, merging
+│   ├── utils.py            Parameter compatibility helper
+│   └── vision.py           Vision API integration
 ├── backends/
 │   ├── base.py             BackendType enum, registry
 │   ├── simple.py           SimpleBackend (all formats)
@@ -95,7 +99,14 @@ src/local_read_mcp/
 ├── segmenter/
 │   ├── toc_extractor.py    TOC extraction + page calibration
 │   └── chunk_planner.py    Page range planning + overlap
-├── converters/             Format converters (PyMuPDF, mammoth, etc.)
+├── converters/
+│   ├── _compat.py          Optional dependency imports (centralized)
+│   ├── base.py             DocumentConverterResult + constants
+│   ├── utils.py            apply_content_limit, html_to_markdown_result
+│   ├── section_extractor.py  extract_sections_from_markdown
+│   ├── latex_fixer.py      fix_latex_formulas
+│   ├── pdf.py, docx.py, xlsx.py, pptx.py, html.py, ...
+│   └── simple.py           TextConverter, JsonConverter, YamlConverter, ...
 ├── output_manager.py       .local_read_mcp/ directory management
 ├── markdown_converter.py   Intermediate JSON → markdown
 ├── index_generator.py      Section/table/figure index

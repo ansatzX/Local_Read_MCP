@@ -1,12 +1,12 @@
 # Local Read MCP Server
 
-MCP server for local document processing — structured extraction from PDFs, Office, images, and code. Designed to complement an agent's built-in Read tool, not duplicate it.
+MCP server for local document processing — structured extraction from PDFs, Office documents, HTML, ZIP archives, and optional image analysis. Designed to complement an agent's built-in Read tool, not duplicate it.
 
 ## Tools
 
 | Tool | When to use |
 |------|-------------|
-| `process_binary_file` | **MUST** for any non-text file before reading. Converts to structured output and saves to `.local_read_mcp/`. |
+| `process_binary_file` | Convert supported binary/document/archive files to structured output before reading. Saves to `.local_read_mcp/`. |
 | `analyze_image` | Analyze images via Vision API (Doubao, GPT-4o, etc.). Result saved to `.local_read_mcp/analysis/`. |
 | `get_vision_status` | Check if Vision API is configured. |
 
@@ -66,8 +66,8 @@ Models downloaded (~4.5GB total):
 process_binary_file(file.pdf)
   ├─ format detection → backend selection
   │
-  ├─ SIMPLE (zero-dependency, all formats)
-  │   └─ Built-in converters: PyMuPDF / mammoth / openpyxl / python-pptx
+  ├─ SIMPLE (local converters, no model/API dependency)
+  │   └─ Built-in converters + MarkItDown fallback: PyMuPDF / mammoth / openpyxl / python-pptx
   │
   ├─ VLM-HYBRID (MinerU required, PDF only)
   │   └─ MinerU hybrid-auto-engine: VLM layout + pipeline OCR/formula/table
@@ -87,7 +87,7 @@ All results saved to `.local_read_mcp/<file>_<timestamp>/`:
 ## Development
 
 ```bash
-uv run pytest          # 136 tests
+uv run pytest          # Run tests
 uv run ruff format .   # Format code
 uv run ruff check .    # Lint
 ```

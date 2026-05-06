@@ -2,15 +2,15 @@
 
 ## Project Identity
 
-Local Read MCP is a document processing MCP server. Its purpose: let AI agents read local files that a built-in Read tool cannot handle (PDFs, Office docs, images, ZIPs) and get structured output saved to disk.
+Local Read MCP is a document processing MCP server. Its purpose: let AI agents read local files that a built-in Read tool cannot parse structurally (PDFs, Office docs, HTML, ZIPs) and get structured output saved to disk. Image understanding is handled separately through the optional vision tool.
 
 ## Design Principles
 
 ### 1. Complement, don't duplicate
 
 Agents already have a built-in Read tool for plain text and images. This project does **not** add redundant read tools. It adds what's missing:
-- `process_binary_file` — **MUST** for any binary file before reading. This is the only entry point.
-- `analyze_image` — vision API analysis of images, result saved to disk.
+- `process_binary_file` — primary entry point for binary/document conversion before reading (PDF, Office, HTML, ZIP, etc.).
+- `analyze_image` — optional vision API analysis of image files, result saved to disk.
 - `get_vision_status` — check if vision API is configured.
 
 ### 2. Output always goes to .local_read_mcp/
@@ -23,7 +23,7 @@ All persistent output from any tool must land inside `.local_read_mcp/` in the c
 BackendType: AUTO → SIMPLE → VLM_HYBRID
 ```
 
-- `SIMPLE` — zero external dependencies, handles all formats. Always available.
+- `SIMPLE` — no model/API/MinerU dependency. Uses local converters and the MarkItDown fallback. Always available.
 - `VLM_HYBRID` — requires MinerU `pip install local-read-mcp[mineru]` + downloaded models (~4.5GB). PDF only. Calls MinerU's `hybrid_analyze.doc_analyze()` directly — never through `do_parse`'s callback/tempdir pattern.
 
 Select best is `VLM_HYBRID > SIMPLE`. No other backends exist. `OPENAI_VLM` and `QWEN_VL` were removed — they were duplicates. General-purpose vision API (GPT-4V, Doubao) belongs in `analyze_image`, not in the backend system.
@@ -41,12 +41,10 @@ This is internal, not an extra tool. Single `process_binary_file` call handles e
 
 ### 5. MinerU is a dependency, not forked code
 
-MinerU is installed as `pip install mineru`. We call its Python API directly:
+MinerU is installed as `pip install mineru`. The current backend calls its Python API directly:
 - `hybrid_analyze.doc_analyze()` for VLM-HYBRID backend
-- `vlm_analyze.doc_analyze()` if needed
-- `pipeline_analyze.doc_analyze_streaming()` if needed
 
-We do NOT fork MinerU code, reimplement its models, or manage model downloads. Model paths are configured in `mineru.json` (project root, gitignored). Engine selection (vLLM > LMDeploy > MLX-VLM > transformers) is handled by MinerU's `get_vlm_engine()`.
+We do NOT fork MinerU code, reimplement its models, or manage model downloads. Model paths are configured in `mineru.json` (project root, gitignored). Engine selection (vLLM > LMDeploy > MLX-VLM > transformers) is handled inside MinerU.
 
 MinerU's config is pointed to the project root automatically via `os.environ.setdefault("MINERU_TOOLS_CONFIG_JSON", ...)` in `backends/mineru.py`.
 
@@ -55,7 +53,7 @@ MinerU's config is pointed to the project root automatically via `os.environ.set
 - **Imports**: Use relative imports within the package (`from ..backends import ...`). Only use absolute imports in tests.
 - **Docstrings**: Keep them short for MCP tools — the docstring is sent as tool description context to the LLM. No Args sections longer than needed.
 - **Error handling**: Backend processing failures should warn and fall back, not crash. Outer `process_binary_file` catches exceptions and returns `{"success": False, "error": ...}`.
-- **Tests**: 136 tests, `pytest` with `asyncio` support. Test with real file flows (Simple backend), mock MinerU (it's optional).
+- **Tests**: `pytest` with `asyncio` support. Test with real file flows (Simple backend), mock MinerU (it's optional).
 - **Architecture docs**: After any change to the tool set, backend system, output layout, or configuration, update `ARCHITECTURE.md` to describe the new state. Keep it current; no historical "what changed" sections.
 
 ## Key Architectural Decisions (Why)
@@ -73,10 +71,15 @@ MinerU's config is pointed to the project root automatically via `os.environ.set
 
 | File | Purpose |
 |------|---------|
-| `src/local_read_mcp/server/app.py` | MCP tools, orchestration |
+| `src/local_read_mcp/server/app.py` | MCP tools only (3 tools) |
+| `src/local_read_mcp/server/orchestrator.py` | Chunk planning, single-chunk processing, merging |
 | `src/local_read_mcp/backends/mineru.py` | VlmHybridBackend → MinerU hybrid analyzer |
 | `src/local_read_mcp/backends/base.py` | BackendType enum, registry |
 | `src/local_read_mcp/segmenter/` | TocExtractor, ChunkPlanner |
-| `src/local_read_mcp/converters/` | All format converters (Simple backend) |
+| `src/local_read_mcp/converters/base.py` | DocumentConverterResult, media constants |
+| `src/local_read_mcp/converters/_compat.py` | Centralized optional dependency imports |
+| `src/local_read_mcp/converters/section_extractor.py` | extract_sections_from_markdown |
+| `src/local_read_mcp/converters/latex_fixer.py` | fix_latex_formulas |
+| `src/local_read_mcp/converters/` | Other format converters (PdfConverter, DocxConverter, etc.) |
 | `mineru.json.template` | MinerU config template |
 | `ARCHITECTURE.md` | Full design doc |
