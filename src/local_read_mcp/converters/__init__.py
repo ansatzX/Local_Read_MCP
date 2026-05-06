@@ -7,17 +7,15 @@ from .base import (
     AUDIO_EXTENSIONS,
     VIDEO_EXTENSIONS,
     MEDIA_EXTENSIONS,
-    _CustomMarkdownify
 )
+from ._compat import _CustomMarkdownify
 
 from .utils import (
-    PaginationManager,
-    generate_session_id,
     apply_content_limit,
-    extract_sections_from_markdown,
-    fix_latex_formulas,
-    html_to_markdown_result
+    html_to_markdown_result,
 )
+from .section_extractor import extract_sections_from_markdown
+from .latex_fixer import fix_latex_formulas
 
 from .html import HtmlConverter, convert_html_to_md
 from .docx import DocxConverter
@@ -40,8 +38,6 @@ __all__ = [
     "MEDIA_EXTENSIONS",
 
     # Utilities
-    "PaginationManager",
-    "generate_session_id",
     "apply_content_limit",
     "extract_sections_from_markdown",
     "fix_latex_formulas",

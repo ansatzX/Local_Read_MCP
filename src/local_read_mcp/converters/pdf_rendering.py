@@ -1,10 +1,20 @@
 import logging
 import os
-import tempfile
+import time
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
-from .base import fitz
+from ._compat import fitz
 
 logger = logging.getLogger(__name__)
+
+
+def _local_tmp_dir(prefix: str) -> str:
+    """Create a temp directory under .local_read_mcp/ instead of system /tmp."""
+    base = Path.cwd() / ".local_read_mcp"
+    ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    d = base / f"{prefix}{ts}"
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d)
 
 
 def render_pdf_to_images(
@@ -18,7 +28,7 @@ def render_pdf_to_images(
 
     Args:
         pdf_path: Path to PDF file
-        output_dir: Directory to save images (default: temp dir)
+        output_dir: Directory to save images (default: .local_read_mcp/ dir)
         dpi: DPI for rendering (default: 200)
         page_range: Tuple (start_page, end_page) 0-indexed, None for all
         format: Output format (png, jpeg)
@@ -31,7 +41,7 @@ def render_pdf_to_images(
 
     # Create output directory
     if output_dir is None:
-        output_dir = tempfile.mkdtemp(prefix="pdf_render_")
+        output_dir = _local_tmp_dir("pdf_render_")
     else:
         os.makedirs(output_dir, exist_ok=True)
 

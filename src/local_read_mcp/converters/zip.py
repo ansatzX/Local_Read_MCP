@@ -1,8 +1,7 @@
 import json
 import logging
 import os
-import shutil
-import tempfile
+import time
 import zipfile
 
 from .base import (
@@ -10,9 +9,8 @@ from .base import (
     IMAGE_EXTENSIONS,
     AUDIO_EXTENSIONS,
     VIDEO_EXTENSIONS,
-    pdfminer,
-    MarkItDown
 )
+from ._compat import pdfminer, MarkItDown
 from .utils import apply_content_limit
 from .simple import TextConverter, JsonConverter, YamlConverter, CsvConverter, MarkItDownConverter
 from .docx import DocxConverter
@@ -29,7 +27,11 @@ def ZipConverter(local_path: str, **kwargs):
     """
     logger = logging.getLogger(__name__)
 
-    temp_dir = tempfile.mkdtemp(prefix="zip_extract_")
+    from pathlib import Path as _P
+    base = _P.cwd() / ".local_read_mcp"
+    ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    temp_dir = str(base / f"zip_extract_{ts}")
+    os.makedirs(temp_dir, exist_ok=True)
     md_content = f"# Extracted from ZIP: {os.path.basename(local_path)}\n\n"
 
     try:
@@ -161,15 +163,14 @@ def ZipConverter(local_path: str, **kwargs):
                     logger.warning(f"Warning: Error processing {rel_path} from ZIP: {e}")
 
     finally:
-        # Clean up temporary directory
-        try:
-            shutil.rmtree(temp_dir)
-        except Exception as e:
-            logger.warning(f"Warning: Could not remove temporary directory {temp_dir}: {e}")
+        # temp_dir kept under .local_read_mcp/ for agent inspection
+        pass
 
     # Apply content limit
     final_content = apply_content_limit(md_content.strip())
 
     return DocumentConverterResult(
-        title="ZIP Archive Contents", text_content=final_content
+        title="ZIP Archive Contents",
+        text_content=final_content,
+        metadata={"extraction_dir": temp_dir},
     )

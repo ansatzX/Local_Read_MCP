@@ -1,9 +1,7 @@
 import os
 
-from .base import (
-    DocumentConverterResult,
-    mammoth
-)
+from .base import DocumentConverterResult
+from ._compat import mammoth
 from .utils import html_to_markdown_result
 
 

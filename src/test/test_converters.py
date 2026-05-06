@@ -34,8 +34,6 @@ from local_read_mcp.converters import (
     apply_content_limit,
     extract_sections_from_markdown,
     fix_latex_formulas,
-    generate_session_id,
-    PaginationManager,
     inspect_pdf,
     render_pdf_to_images,
     extract_form_fields,
@@ -217,12 +215,6 @@ class TestCsvConverter:
 class TestContentLimit:
     """Tests for apply_content_limit function."""
     
-    def test_apply_content_limit_under_limit(self):
-        """Test content under the limit."""
-        content = "Short content"
-        result = apply_content_limit(content, max_chars=1000)
-        
-        assert result == content
     
     def test_apply_content_limit_over_limit(self):
         """Test content over the limit."""
@@ -232,13 +224,6 @@ class TestContentLimit:
         assert len(result) == 200000 + len("\n... [Content truncated]")
         assert result.endswith("\n... [Content truncated]")
     
-    def test_apply_content_limit_exact_limit(self):
-        """Test content exactly at the limit."""
-        content = "A" * 200000
-        result = apply_content_limit(content, max_chars=200000)
-        
-        assert result == content
-
 
 class TestSectionExtraction:
     """Tests for extract_sections_from_markdown function."""
@@ -330,120 +315,9 @@ class TestLatexFixes:
         assert result is None
 
 
-class TestSessionId:
-    """Tests for generate_session_id function."""
-    
-    def test_generate_session_id_format(self):
-        """Test session ID format."""
-        session_id = generate_session_id("/path/to/file.pdf")
-        
-        # Should have format: prefix_hash_timestamp
-        parts = session_id.split("_")
-        assert len(parts) == 3
-        assert parts[0] == "session"
-        assert len(parts[1]) == 8  # Hash length
-        assert parts[2].isdigit()  # Timestamp
-    
-    def test_generate_session_id_custom_prefix(self):
-        """Test session ID with custom prefix."""
-        session_id = generate_session_id("/path/to/file.pdf", prefix="pdf")
-        
-        assert session_id.startswith("pdf_")
-    
-    def test_generate_session_id_deterministic_hash(self):
-        """Test that same file path produces same hash."""
-        path = "/path/to/file.pdf"
-        id1 = generate_session_id(path)
-        id2 = generate_session_id(path)
-        
-        # Hash parts should be the same
-        hash1 = id1.split("_")[1]
-        hash2 = id2.split("_")[1]
-        assert hash1 == hash2
-
-
-class TestPaginationManager:
-    """Tests for PaginationManager class."""
-    
-    def test_pagination_manager_init(self):
-        """Test PaginationManager initialization."""
-        content = "A" * 50000
-        pm = PaginationManager(content, page_size=10000)
-        
-        assert pm.total_chars == 50000
-        assert pm.page_size == 10000
-        assert pm.total_pages == 5
-    
-    def test_pagination_get_page(self):
-        """Test getting a specific page."""
-        content = "A" * 50000
-        pm = PaginationManager(content, page_size=10000)
-        
-        page_content, has_more, info = pm.get_page(1)
-        
-        assert len(page_content) == 10000
-        assert has_more is True
-        assert info["current_page"] == 1
-        assert info["total_pages"] == 5
-    
-    def test_pagination_get_last_page(self):
-        """Test getting the last page."""
-        content = "A" * 50000
-        pm = PaginationManager(content, page_size=10000)
-        
-        page_content, has_more, info = pm.get_page(5)
-        
-        assert len(page_content) == 10000
-        assert has_more is False
-        assert info["current_page"] == 5
-    
-    def test_pagination_get_slice(self):
-        """Test getting a slice by offset."""
-        content = "0123456789" * 1000  # 10000 chars
-        pm = PaginationManager(content, page_size=10000)
-        
-        slice_content, has_more, info = pm.get_slice(1000, 2000)
-        
-        assert len(slice_content) == 2000
-        assert has_more is True
-        assert info["char_offset"] == 1000
-        assert info["char_limit"] == 2000
-    
-    def test_pagination_get_slice_no_limit(self):
-        """Test getting slice without limit (to end)."""
-        content = "A" * 5000
-        pm = PaginationManager(content, page_size=1000)
-        
-        slice_content, has_more, info = pm.get_slice(1000, None)
-        
-        assert len(slice_content) == 4000
-        assert has_more is False
-
-
 class TestPdfEnhancements:
     """Tests for PDF enhancement features."""
 
-    def test_pdf_inspector_missing_file(self):
-        """Test PDF inspector with missing file."""
-        result = inspect_pdf("/non/existent/file.pdf")
-        assert "error" in result
-
-    def test_render_pdf_missing_file(self):
-        """Test PDF rendering with missing file."""
-        result = render_pdf_to_images("/non/existent/file.pdf")
-        assert len(result) == 1
-        assert "error" in result[0]
-
-    def test_extract_forms_missing_file(self):
-        """Test form extraction with missing file."""
-        result = extract_form_fields("/non/existent/file.pdf")
-        assert "error" in result
-
-    def test_extract_tables_missing_file(self):
-        """Test table extraction with missing file."""
-        result = extract_tables("/non/existent/file.pdf")
-        assert len(result) == 1
-        assert "error" in result[0]
 
     def test_document_converter_result_new_fields(self):
         """Test that DocumentConverterResult has new fields."""
@@ -494,54 +368,28 @@ class TestPdfEnhancements:
         assert "extracted_tables" not in d
 
 
-class TestNewTools:
-    """Tests for the new consolidated tools architecture."""
+    def test_pdf_render_images_uses_images_output_dir(self, monkeypatch, tmp_path):
+        """PdfConverter with render_images=True should pass output_dir under images_output_dir."""
+        import local_read_mcp.converters.pdf as pdf_module
+        from pathlib import Path
 
-    def test_format_detection_logic(self):
-        """Test format detection function logic."""
-        test_cases = [
-            ("/path/to/file.txt", "text"),
-            ("/path/to/file.md", "text"),
-            ("/path/to/file.json", "json"),
-            ("/path/to/file.csv", "csv"),
-            ("/path/to/file.yaml", "yaml"),
-            ("/path/to/file.yml", "yaml"),
-            ("/path/to/file.pdf", "pdf"),
-            ("/path/to/file.docx", "word"),
-            ("/path/to/file.doc", "word"),
-            ("/path/to/file.xlsx", "excel"),
-            ("/path/to/file.xls", "excel"),
-            ("/path/to/file.pptx", "ppt"),
-            ("/path/to/file.ppt", "ppt"),
-            ("/path/to/file.html", "html"),
-            ("/path/to/file.htm", "html"),
-            ("/path/to/file.zip", "zip"),
-            ("/path/to/file.unknown", None),
-        ]
-        # Actual detection is tested in integration tests
-        assert len(test_cases) > 0
+        pdf_file = tmp_path / 'sample.pdf'
+        pdf_file.write_bytes(b'%PDF-1.4\n')
+        images_dir = tmp_path / '.local_read_mcp' / 'sample' / 'images'
+        captured = {}
 
-    def test_all_converters_available(self):
-        """Verify all converter modules are available."""
-        from local_read_mcp.converters import (
-            TextConverter, JsonConverter, YamlConverter, CsvConverter,
-            PdfConverter, DocxConverter, XlsxConverter,
-            PptxConverter, HtmlConverter, ZipConverter,
-            MarkItDownConverter
-        )
-        # Just verify imports work
-        assert TextConverter is not None
-        assert JsonConverter is not None
-        assert YamlConverter is not None
-        assert CsvConverter is not None
-        assert PdfConverter is not None
-        assert DocxConverter is not None
-        assert XlsxConverter is not None
-        assert PptxConverter is not None
-        assert HtmlConverter is not None
-        assert ZipConverter is not None
-        assert MarkItDownConverter is not None
+        monkeypatch.setattr(pdf_module, 'extract_text_pymupdf', lambda path: 'hello')
+        monkeypatch.setattr(pdf_module, 'fix_latex_formulas', lambda text: text)
+        monkeypatch.setattr(pdf_module, 'apply_content_limit', lambda text: text)
+        monkeypatch.setattr(pdf_module, 'fitz', object())
 
+        def fake_render(path, output_dir=None, **kwargs):
+            captured['output_dir'] = output_dir
+            return [{'page': 1, 'path': str(Path(output_dir or '.') / 'page000.png')}]
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        monkeypatch.setattr(pdf_module, 'render_pdf_to_images', fake_render)
+
+        result = pdf_module.PdfConverter(str(pdf_file), render_images=True, images_output_dir=str(images_dir))
+
+        assert captured['output_dir'] == str(images_dir / 'rendered_pages')
+

@@ -1,11 +1,8 @@
 import os
 from typing import Any
 
-from .base import (
-    DocumentConverterResult,
-    _CustomMarkdownify,
-    BeautifulSoup
-)
+from .base import DocumentConverterResult
+from ._compat import _CustomMarkdownify, BeautifulSoup
 from .utils import html_to_markdown_result
 
 

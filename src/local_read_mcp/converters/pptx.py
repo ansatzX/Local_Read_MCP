@@ -1,11 +1,9 @@
+import html
 import os
 import re
 
-from .base import (
-    DocumentConverterResult,
-    pptx,
-    html
-)
+from .base import DocumentConverterResult
+from ._compat import pptx
 from .utils import apply_content_limit
 from .html import convert_html_to_md
 

@@ -1,12 +1,9 @@
+import csv
 import json
 import os
 
-from .base import (
-    DocumentConverterResult,
-    yaml,
-    csv_module,
-    MarkItDown
-)
+from .base import DocumentConverterResult
+from ._compat import yaml, MarkItDown
 
 
 def TextConverter(local_path: str, **kwargs) -> DocumentConverterResult:
@@ -78,7 +75,7 @@ def CsvConverter(local_path: str, **kwargs) -> DocumentConverterResult:
         DocumentConverterResult containing markdown table.
     """
     with open(local_path, "r", encoding="utf-8", newline="") as f:
-        reader = csv_module.reader(f)
+        reader = csv.reader(f)
         rows = list(reader)
 
     if not rows:

@@ -20,8 +20,6 @@ from .converters import (
     AUDIO_EXTENSIONS,
     VIDEO_EXTENSIONS,
     MEDIA_EXTENSIONS,
-    PaginationManager,
-    generate_session_id,
     apply_content_limit,
     extract_sections_from_markdown,
     fix_latex_formulas,
@@ -57,8 +55,6 @@ __all__ = [
     "MEDIA_EXTENSIONS",
 
     # Utilities
-    "PaginationManager",
-    "generate_session_id",
     "apply_content_limit",
     "extract_sections_from_markdown",
     "fix_latex_formulas",

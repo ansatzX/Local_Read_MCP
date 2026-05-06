@@ -5,11 +5,8 @@ import time
 import traceback
 from typing import Any, Dict, List, Optional
 
-from .base import (
-    DocumentConverterResult,
-    openpyxl,
-    get_column_letter
-)
+from .base import DocumentConverterResult
+from ._compat import openpyxl, get_column_letter
 from .utils import apply_content_limit
 
 

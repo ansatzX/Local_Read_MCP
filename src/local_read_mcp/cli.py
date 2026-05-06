@@ -73,28 +73,44 @@ def convert_file(
             return 1
 
         output_path = Path(result["output_directory"])
-        intermediate_path = Path(result["files"]["intermediate_json"])
-        markdown_path = Path(result["files"]["markdown"])
-        index_path = Path(result["files"]["index_json"])
+
+        files = result.get("files", {})
+        intermediate_json = files.get("intermediate_json")
+        markdown = files.get("markdown") or files.get("merged_markdown")
+        index_json = files.get("index_json")
+        chunk_count = result.get("chunk_count", 1)
+
+        if not intermediate_json:
+            print(f"Error: No intermediate_json in result", file=sys.stderr)
+            return 1
+
+        intermediate_path = Path(intermediate_json)
+        markdown_path = Path(markdown) if markdown else None
+        index_path = Path(index_json) if index_json else None
 
         if not include_page_breaks or not include_metadata:
-            with open(intermediate_path, encoding="utf-8") as handle:
-                intermediate = json.load(handle)
+            if markdown_path:
+                with open(intermediate_path, encoding="utf-8") as handle:
+                    intermediate = json.load(handle)
 
-            MarkdownConverter(
-                intermediate,
-                include_page_breaks=include_page_breaks,
-                include_metadata=include_metadata,
-            ).save_to_file(str(markdown_path))
+                MarkdownConverter(
+                    intermediate,
+                    include_page_breaks=include_page_breaks,
+                    include_metadata=include_metadata,
+                ).save_to_file(str(markdown_path))
 
         if verbose:
             print(f"Output directory: {output_path}")
             print(f"Backend: {result['backend_used']}")
+            if chunk_count > 1:
+                print(f"Chunks: {chunk_count}")
             for warning in result.get("warnings", []):
                 print(f"Warning: {warning}", file=sys.stderr)
             print(f"  Saved: {intermediate_path.name}")
-            print(f"  Saved: {index_path.name}")
-            print(f"  Saved: {markdown_path.name}")
+            if index_path:
+                print(f"  Saved: {index_path.name}")
+            if markdown_path:
+                print(f"  Saved: {markdown_path.name}")
 
         print(f"\nSuccess! Output saved to: {output_path}")
         return 0

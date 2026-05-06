@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, Any, List, Optional
-from .base import fitz
+from ._compat import fitz
 
 logger = logging.getLogger(__name__)
 

@@ -1,19 +1,18 @@
 import logging
 import os
-import tempfile
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .base import (
-    DocumentConverterResult,
-    pdfminer,
-    fitz
-)
+from .base import DocumentConverterResult
+from ._compat import pdfminer, fitz
 from .pdf_inspector import inspect_pdf
 from .pdf_rendering import render_pdf_to_images
 from .pdf_forms import extract_form_fields
 from .pdf_tables import extract_tables
-from .utils import extract_sections_from_markdown, fix_latex_formulas, apply_content_limit
+from .utils import apply_content_limit
+from .section_extractor import extract_sections_from_markdown
+from .latex_fixer import fix_latex_formulas
 
 
 def extract_text_pymupdf(pdf_path: str) -> str:
@@ -75,9 +74,12 @@ def extract_pdf_images(
 
     # Create output directory if needed
     if output_dir is None:
-        output_dir = tempfile.mkdtemp(prefix="pdf_images_")
-    else:
-        os.makedirs(output_dir, exist_ok=True)
+        from pathlib import Path as _P
+        import time as _t
+        base = _P.cwd() / ".local_read_mcp"
+        ts = _t.strftime("%Y%m%d_%H%M%S", _t.localtime())
+        output_dir = str(base / f"pdf_images_{ts}")
+    os.makedirs(output_dir, exist_ok=True)
 
     logger = logging.getLogger(__name__)
     logger.info(f"Extracting images from PDF: {pdf_path}")
@@ -326,8 +328,14 @@ def PdfConverter(
         # New features
         if render_images and fitz is not None:
             try:
+                render_output_dir = (
+                    str(Path(images_output_dir) / 'rendered_pages')
+                    if images_output_dir
+                    else None
+                )
                 rendered_pages = render_pdf_to_images(
                     local_path,
+                    output_dir=render_output_dir,
                     dpi=render_dpi,
                     format=render_format,
                     page_range=page_range

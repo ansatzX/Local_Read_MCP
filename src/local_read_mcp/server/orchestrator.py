@@ -1,0 +1,262 @@
+"""Processing orchestration: chunk planning, single-chunk processing, and merging."""
+
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from ..index_generator import IndexGenerator
+from ..markdown_converter import MarkdownConverter
+from ..segmenter import Chunk, ChunkPlanner, TocExtractor
+
+logger = logging.getLogger(__name__)
+
+
+def plan_chunks(
+    file_path: str,
+    format: str,
+    backend_name: str,
+    chapter_split: bool | str | int,
+    start_page: int | None,
+    end_page: int | None,
+    page_batch_size: int = 64,
+) -> list[Any]:
+    """Determine processing chunks for the given document.
+
+    Returns a list of Chunk objects (from the segmenter module).
+    A single-element list means no splitting.
+    """
+    # No splitting requested
+    if chapter_split is False or chapter_split is None:
+        return [Chunk(phys_start=start_page or 0, phys_end=end_page or 2**31 - 1)]
+
+    # Only PDF + layout-capable backend triggers the segmenter
+    if format != "pdf":
+        return [Chunk(phys_start=start_page or 0, phys_end=end_page or 2**31 - 1)]
+
+    # Load document for page count and chapter detection
+    try:
+        import fitz  # noqa: PLC0415
+    except ImportError:
+        logger.warning("PyMuPDF not available, cannot detect chapters")
+        return [Chunk(phys_start=start_page or 0, phys_end=end_page or 2**31 - 1)]
+
+    try:
+        doc = fitz.open(file_path)
+    except Exception as e:
+        logger.warning("Cannot open PDF for chapter detection: %s, processing whole file", e)
+        s = start_page or 0
+        e = end_page or 2**31 - 1
+        return [Chunk(phys_start=s, phys_end=e)]
+
+    total = doc.page_count
+
+    # Determine if splitting is worthwhile
+    need_split = False
+    split_type: str | int = "auto"
+    if chapter_split is True:
+        need_split = True
+        split_type = "chapter"
+    elif isinstance(chapter_split, str) and chapter_split == "auto":
+        need_split = total > 30
+        split_type = "auto"
+    elif isinstance(chapter_split, str) and chapter_split in ("chapter", "section"):
+        need_split = True
+        split_type = chapter_split
+    elif isinstance(chapter_split, int):
+        need_split = True
+        split_type = chapter_split
+
+    if not need_split:
+        doc.close()
+        s = start_page or 0
+        e = min(end_page or total - 1, total - 1)
+        return [Chunk(phys_start=s, phys_end=e)]
+
+    # Run segmenter
+    try:
+        extractor = TocExtractor()
+        chapters = extractor.extract(doc)
+        planner = ChunkPlanner(overlap=2)
+
+        if chapters:
+            raw_chunks = planner.plan_from_chapters(chapters, total_pages=total)
+        elif isinstance(split_type, int):
+            raw_chunks = planner.plan_fixed(total, chunk_size=split_type)
+        else:
+            raw_chunks = planner.plan_fixed(total, chunk_size=page_batch_size)
+
+        doc.close()
+    except Exception as e:
+        logger.warning("Chapter detection failed: %s, falling back to fixed chunks", e)
+        doc.close()
+        planner = ChunkPlanner()
+        raw_chunks = planner.plan_fixed(total, chunk_size=page_batch_size)
+
+    # Apply start_page / end_page bounds
+    if start_page is not None or end_page is not None:
+        bounded: list[Any] = []
+        for c in raw_chunks:
+            s = c.phys_start
+            e = c.phys_end
+            if start_page is not None:
+                s = max(s, start_page)
+            if end_page is not None:
+                e = min(e, end_page)
+            if s <= e:
+                bounded.append(Chunk(phys_start=s, phys_end=e, title=c.title, level=c.level, batch_size=c.batch_size))
+        return bounded
+
+    return raw_chunks
+
+
+def process_and_save(
+    file_path: str,
+    backend,
+    format: str,
+    output_path: Path,
+    images_dir: Path,
+    chunk: Any,
+    backend_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Process one chunk through the backend and save all outputs."""
+    # For PDF page-range chunks, slice the PDF into a temp file
+    # so the backend receives a PDF that starts at page 0.
+    if format == "pdf":
+        import fitz  # noqa: PLC0415
+
+        try:
+            src = fitz.open(file_path)
+        except Exception:
+            sliced_path = Path(file_path)
+        else:
+            total = src.page_count
+            p_start = max(0, min(chunk.phys_start, total - 1))
+            p_end = max(p_start, min(chunk.phys_end, total - 1))
+
+            if p_start == 0 and p_end >= total - 1:
+                sliced_path = Path(file_path)
+                src.close()
+            else:
+                sliced = fitz.open()
+                sliced.insert_pdf(src, from_page=p_start, to_page=p_end)
+                if images_dir:
+                    images_dir.mkdir(parents=True, exist_ok=True)
+                tmp_dir = str(images_dir.parent) if images_dir else str(Path.cwd() / ".local_read_mcp")
+                os.makedirs(tmp_dir, exist_ok=True)
+                tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=".pdf", dir=tmp_dir)
+                os.close(tmp_fd)
+                sliced.save(tmp_path_str)
+                sliced.close()
+                sliced_path = Path(tmp_path_str)
+                src.close()
+    else:
+        sliced_path = Path(file_path)
+
+    try:
+        intermediate = backend.process(sliced_path, format, **backend_kwargs)
+    finally:
+        pass  # sliced PDF kept under .local_read_mcp/ for agent inspection
+
+    # Save intermediate.json
+    intermediate_path = output_path / "intermediate.json"
+    with open(intermediate_path, 'w', encoding='utf-8') as f:
+        json.dump(intermediate, f, ensure_ascii=False, indent=2)
+
+    # Save output.md
+    markdown_converter = MarkdownConverter(intermediate)
+    markdown_content = markdown_converter.convert()
+    markdown_path = output_path / "output.md"
+    with open(markdown_path, 'w', encoding='utf-8') as f:
+        f.write(markdown_content)
+
+    # Save index.json
+    index_generator = IndexGenerator(intermediate)
+    index_path = output_path / "index.json"
+    index_generator.save_to_file(str(index_path))
+
+    result: dict[str, Any] = {
+        "title": chunk.title if hasattr(chunk, 'title') else "",
+        "phys_start": chunk.phys_start if hasattr(chunk, 'phys_start') else 0,
+        "phys_end": chunk.phys_end if hasattr(chunk, 'phys_end') else 0,
+        "intermediate_path": intermediate_path,
+        "markdown_path": markdown_path,
+        "index_path": index_path,
+        "intermediate": intermediate,
+        "markdown_content": markdown_content,
+    }
+    if format == "pdf" and sliced_path != Path(file_path):
+        result["sliced_pdf_path"] = str(sliced_path)
+
+    if images_dir.exists():
+        image_files = list(images_dir.iterdir())
+        if image_files:
+            result["image_files"] = image_files
+
+    return result
+
+
+def merge_chunk_markdowns(chunk_results: list[dict[str, Any]]) -> str:
+    """Concatenate chunk markdowns with chapter separators."""
+    parts: list[str] = []
+    for cr in chunk_results:
+        if "error" in cr:
+            parts.append(
+                f"\n\n---\n## [{cr.get('title', 'error')}] (processing failed)\n\n"
+                f"Error: {cr['error']}\n"
+            )
+            continue
+        md = cr.get("markdown_content", "")
+        title = cr.get("title", "")
+        p_start = cr.get("phys_start", 0)
+        p_end = cr.get("phys_end", 0)
+        header = f"\n\n---\n# {title}  (pages {p_start + 1}–{p_end + 1})\n\n"
+        parts.append(header + md)
+    return "\n".join(parts).strip()
+
+
+
+
+def merge_chunk_intermediates(source_path: str, format: str, chunk_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge successful chunk intermediate JSON objects into a top-level intermediate document."""
+    merged: dict[str, Any] = {
+        "source": {"path": str(Path(source_path).absolute()), "format": format, "page_count": 0},
+        "metadata": {},
+        "blocks": {},
+        "reading_order": [],
+    }
+    block_index = 0
+    for result in chunk_results:
+        if "error" in result:
+            continue
+        offset = int(result.get("phys_start", 0))
+        intermediate = result["intermediate"]
+        merged["source"]["page_count"] = max(
+            merged["source"]["page_count"], int(result.get("phys_end", offset)) + 1
+        )
+        for old_id in intermediate.get("reading_order", []):
+            block = dict(intermediate.get("blocks", {}).get(old_id, {}))
+            if "page" in block:
+                block["page"] = offset + int(block["page"])
+            new_id = f"block_{block_index:08x}"
+            block_index += 1
+            merged["blocks"][new_id] = block
+            merged["reading_order"].append(new_id)
+    return merged
+
+def save_structural_toc(output_path: Path, chunks: list[Any]) -> None:
+    """Save the structural table of contents as JSON."""
+    toc_data = []
+    for idx, c in enumerate(chunks):
+        toc_data.append({
+            "chunk_index": idx + 1,
+            "title": getattr(c, "title", ""),
+            "level": getattr(c, "level", 1),
+            "phys_start": getattr(c, "phys_start", 0),
+            "phys_end": getattr(c, "phys_end", 0),
+        })
+
+    toc_path = output_path / "structural_toc.json"
+    with open(toc_path, 'w', encoding='utf-8') as f:
+        json.dump(toc_data, f, ensure_ascii=False, indent=2)
