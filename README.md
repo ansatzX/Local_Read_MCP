@@ -4,11 +4,14 @@ MCP server for local document processing — structured extraction from PDFs, Of
 
 ## Tools
 
+Tool exposure is startup-time conditional:
+- Always available: `process_binary_file`
+- Available only when vision config exists (`VISION_API_KEY` or `OPENAI_API_KEY`): `analyze_image`
+
 | Tool | When to use |
 |------|-------------|
 | `process_binary_file` | Convert supported binary/document/archive files to structured output before reading. Saves to `.local_read_mcp/`. |
 | `analyze_image` | Analyze images via Vision API (Doubao, GPT-4o, etc.). Result saved to `.local_read_mcp/analysis/`. |
-| `get_vision_status` | Check if Vision API is configured. |
 
 ## Quick Start
 
@@ -33,13 +36,18 @@ Configure MCP in `~/.claude/settings.json`:
 
 ## Vision API (Optional)
 
-Create `.env`:
+Create `.env` in the repository root:
 
 ```
 VISION_API_KEY=sk-xxx
 VISION_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 VISION_MODEL=doubao-seed-1-8-251228
 ```
+
+At startup, the server loads the repository-root `.env` and then reads environment variables.
+Existing process environment variables take precedence over `.env` values.
+`analyze_image` is registered only if the server sees vision API key env vars at startup.
+After changing env values, restart the MCP server.
 
 ## MinerU VLM-HYBRID Backend (Optional)
 
@@ -83,6 +91,11 @@ All results saved to `.local_read_mcp/<file>_<timestamp>/`:
 - `output.md` — converted markdown
 - `index.json` — section/table/figure index
 - `images/` — extracted images (when requested)
+
+Figure extraction policy (current):
+- PDF image extraction is intentionally recall-first: it extracts embedded rasters and suspicious vector/image regions.
+- No deduplication is applied.
+- TODO: page-level truth judgment (whether a page truly contains a figure) and duplicate discrimination quality evaluation.
 
 ## Development
 

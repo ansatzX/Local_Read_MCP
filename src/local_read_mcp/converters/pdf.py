@@ -15,6 +15,51 @@ from .section_extractor import extract_sections_from_markdown
 from .latex_fixer import fix_latex_formulas
 
 
+def _rect_from_any(rect_obj: Any) -> Optional[tuple[float, float, float, float]]:
+    """Convert an arbitrary rect object into normalized (x0, y0, x1, y1)."""
+    if rect_obj is None:
+        return None
+
+    x0 = y0 = x1 = y1 = None
+    if all(hasattr(rect_obj, attr) for attr in ("x0", "y0", "x1", "y1")):
+        x0 = float(rect_obj.x0)
+        y0 = float(rect_obj.y0)
+        x1 = float(rect_obj.x1)
+        y1 = float(rect_obj.y1)
+    elif isinstance(rect_obj, (list, tuple)) and len(rect_obj) >= 4:
+        x0 = float(rect_obj[0])
+        y0 = float(rect_obj[1])
+        x1 = float(rect_obj[2])
+        y1 = float(rect_obj[3])
+    elif isinstance(rect_obj, dict) and all(k in rect_obj for k in ("x0", "y0", "x1", "y1")):
+        x0 = float(rect_obj["x0"])
+        y0 = float(rect_obj["y0"])
+        x1 = float(rect_obj["x1"])
+        y1 = float(rect_obj["y1"])
+
+    if x0 is None:
+        return None
+
+    x_min, x_max = sorted((x0, x1))
+    y_min, y_max = sorted((y0, y1))
+    return x_min, y_min, x_max, y_max
+
+
+def _expand_rect(
+    rect: tuple[float, float, float, float],
+    margin: float,
+    page_width: float,
+    page_height: float,
+) -> tuple[float, float, float, float]:
+    """Expand rect by margin and clamp within page bounds."""
+    x0, y0, x1, y1 = rect
+    x0 = max(0.0, x0 - margin)
+    y0 = max(0.0, y0 - margin)
+    x1 = min(page_width, x1 + margin)
+    y1 = min(page_height, y1 + margin)
+    return x0, y0, x1, y1
+
+
 def extract_text_pymupdf(pdf_path: str) -> str:
     """Extract text using PyMuPDF (better accuracy)."""
     if fitz is None:
@@ -38,7 +83,11 @@ def extract_pdf_images(
     page_range: Optional[tuple] = None
 ) -> List[Dict[str, Any]]:
     """
-    Extract images from PDF file using PyMuPDF.
+    Extract image-like content from PDF using PyMuPDF.
+
+    This includes:
+    - Embedded raster images (`page.get_images`)
+    - Suspected figure regions from vector graphics (rendered clips, no dedupe)
 
     Args:
         pdf_path: Path to PDF file
@@ -52,12 +101,13 @@ def extract_pdf_images(
             {
                 "page": int,  # Page number (0-indexed)
                 "index": int,  # Image index on the page
-                "xref": int,  # PDF object reference
+                "xref": int | None,  # PDF object reference (None for rendered region clips)
                 "width": int,  # Image width in pixels
                 "height": int,  # Image height in pixels
                 "format": str,  # Image format (png, jpeg, etc.)
                 "size": int,  # File size in bytes
                 "saved_path": str,  # Path where image was saved
+                "kind": str,  # "raster" or "vector_region"
             },
             ...
         ]
@@ -101,9 +151,10 @@ def extract_pdf_images(
         # Extract images from each page
         for page_num in range(start_page, end_page):
             page = doc[page_num]
-            image_list = page.get_images()
+            image_list = page.get_images(full=True)
 
             logger.debug(f"Page {page_num}: found {len(image_list)} images")
+            page_output_index = 0
 
             for img_index, img in enumerate(image_list):
                 xref = img[0]  # XREF number
@@ -119,7 +170,7 @@ def extract_pdf_images(
                     image_height = base_image["height"]
 
                     # Generate filename
-                    image_filename = f"page{page_num:03d}_img{img_index:02d}.{image_ext}"
+                    image_filename = f"page{page_num:03d}_img{page_output_index:04d}_raster.{image_ext}"
                     image_path = os.path.join(output_dir, image_filename)
 
                     # Save image
@@ -136,7 +187,9 @@ def extract_pdf_images(
                         "format": image_ext,
                         "size": len(image_bytes),
                         "saved_path": image_path,
+                        "kind": "raster",
                     })
+                    page_output_index += 1
 
                     logger.debug(
                         f"Extracted: {image_filename} "
@@ -148,6 +201,90 @@ def extract_pdf_images(
                         f"Failed to extract image {img_index} from page {page_num}: {e}"
                     )
                     continue
+
+            # Vector-first "suspicious figure" extraction path (no dedupe):
+            # We prefer over-extraction to avoid missing LaTeX/TikZ-like figures.
+            suspicious_regions: list[tuple[str, tuple[float, float, float, float]]] = []
+            try:
+                clustered = []
+                if hasattr(page, "cluster_drawings"):
+                    clustered = page.cluster_drawings() or []
+
+                if clustered:
+                    for rect_obj in clustered:
+                        rect = _rect_from_any(rect_obj)
+                        if rect is not None:
+                            suspicious_regions.append(("cluster", rect))
+                else:
+                    for drawing in page.get_drawings() or []:
+                        rect = _rect_from_any(drawing.get("rect"))
+                        if rect is not None:
+                            suspicious_regions.append(("drawing", rect))
+            except Exception as e:
+                logger.debug(f"Vector region discovery failed on page {page_num}: {e}")
+
+            # Also include image blocks from text dict as suspicious regions.
+            # This may duplicate raster extraction by design.
+            try:
+                blocks = page.get_text("dict").get("blocks", [])
+                for block in blocks:
+                    if block.get("type") == 1 and "bbox" in block:
+                        rect = _rect_from_any(block["bbox"])
+                        if rect is not None:
+                            suspicious_regions.append(("image_block", rect))
+            except Exception as e:
+                logger.debug(f"Image block discovery failed on page {page_num}: {e}")
+
+            page_rect = _rect_from_any(page.rect)
+            if page_rect is not None and suspicious_regions:
+                _, _, page_w, page_h = page_rect
+                for region_kind, rect in suspicious_regions:
+                    x0, y0, x1, y1 = rect
+                    width = x1 - x0
+                    height = y1 - y0
+
+                    # Keep threshold low to avoid misses; skip only tiny noise.
+                    if width < 12 or height < 12:
+                        continue
+                    if width * height < 144:
+                        continue
+
+                    clip_rect = _expand_rect(rect, margin=3.0, page_width=page_w, page_height=page_h)
+                    fitz_rect = fitz.Rect(*clip_rect) if hasattr(fitz, "Rect") else clip_rect
+
+                    try:
+                        pix = page.get_pixmap(clip=fitz_rect, dpi=200, alpha=False)
+                        image_filename = (
+                            f"page{page_num:03d}_img{page_output_index:04d}_{region_kind}.png"
+                        )
+                        image_path = os.path.join(output_dir, image_filename)
+                        pix.save(image_path)
+
+                        size = 0
+                        try:
+                            size = os.path.getsize(image_path)
+                        except Exception:
+                            pass
+
+                        images_info.append({
+                            "page": page_num,
+                            "index": page_output_index,
+                            "xref": None,
+                            "width": pix.width,
+                            "height": pix.height,
+                            "format": "png",
+                            "size": size,
+                            "saved_path": image_path,
+                            "kind": "vector_region",
+                            "region_source": region_kind,
+                            "bbox": [x0, y0, x1, y1],
+                        })
+                        page_output_index += 1
+                    except Exception as e:
+                        logger.debug(
+                            f"Failed rendering suspicious region on page {page_num}: {e}"
+                        )
+                        continue
 
         doc.close()
 

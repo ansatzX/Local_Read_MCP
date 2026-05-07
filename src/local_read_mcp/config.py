@@ -26,7 +26,8 @@ class Config:
         Args:
             dotenv_path: Path to .env file (only used on first call or if reload=True)
         """
-        self.dotenv_path = dotenv_path or Path.cwd()
+        self.dotenv_path = _resolve_dotenv_path(dotenv_path)
+        _load_dotenv(self.dotenv_path)
 
         # Initialize settings
         self._init_settings()
@@ -93,3 +94,46 @@ def get_config(dotenv_path: Optional[Path] = None, reload: bool = False) -> Conf
     if _config is None or reload:
         _config = Config(dotenv_path=dotenv_path)
     return _config
+
+
+def _project_root() -> Path:
+    """Return the repository root for the installed package."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").exists():
+            return parent
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_dotenv_path(dotenv_path: Optional[Path]) -> Path:
+    if dotenv_path is None:
+        return _project_root() / ".env"
+
+    path = Path(dotenv_path)
+    if path.is_dir():
+        return path / ".env"
+    return path
+
+
+def _load_dotenv(dotenv_path: Path) -> None:
+    """Load simple KEY=value pairs without overriding existing environment."""
+    if not dotenv_path.exists():
+        return
+
+    for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+
+        os.environ[key] = _parse_dotenv_value(value)
+
+
+def _parse_dotenv_value(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value

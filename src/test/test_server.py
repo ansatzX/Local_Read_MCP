@@ -301,3 +301,66 @@ class TestProcessBinaryFileMultiChunk:
         assert Path(result['files']['markdown']).exists()
         assert Path(result['files']['index_json']).exists()
         assert Path(result['files']['structural_toc']).exists()
+
+    @pytest.mark.asyncio
+    async def test_multi_chunk_returns_image_metadata_and_uses_per_chunk_image_dirs(self, monkeypatch, tmp_path):
+        from local_read_mcp.server import app as server_app
+        from local_read_mcp.segmenter import Chunk
+
+        test_file = tmp_path / 'sample.pdf'
+        test_file.write_text('fake pdf', encoding='utf-8')
+
+        monkeypatch.chdir(tmp_path)
+
+        seen_image_dirs = []
+
+        class FakeBackend:
+            name = 'Simple'
+            warning = None
+            def supports_format(self, format_name): return True
+            def process(self, file_path, format_name, **kwargs):
+                image_dir = Path(kwargs["images_output_dir"])
+                image_dir.mkdir(parents=True, exist_ok=True)
+                # Same filename in every chunk to catch overwrite bugs.
+                (image_dir / "page000_img00.png").write_bytes(b"fake-image")
+                seen_image_dirs.append(str(image_dir))
+                return {
+                    'source': {'path': str(file_path), 'format': format_name, 'page_count': 1},
+                    'metadata': {},
+                    'blocks': {'block_00000000': {'type': 'text', 'page': 0, 'bbox': [0, 0, 1, 1], 'content': 'ok'}},
+                    'reading_order': ['block_00000000'],
+                }
+
+        class FakeRegistry:
+            def select_best(self, format_name=None): return FakeBackend()
+            def get(self, backend_type): return FakeBackend()
+
+        monkeypatch.setattr(server_app, 'get_registry', lambda: FakeRegistry())
+        monkeypatch.setattr(server_app, 'plan_chunks', lambda **kwargs: [
+            Chunk(phys_start=0, phys_end=0, title='a'),
+            Chunk(phys_start=1, phys_end=1, title='b'),
+        ])
+
+        result = await server_app.process_binary_file.fn(
+            file_path=str(test_file),
+            format='pdf',
+            extract_images=True,
+        )
+
+        assert result['success'] is True
+        assert result['chunk_count'] == 2
+        assert result['image_count'] == 2
+        assert len(result['image_metadata']) == 2
+        assert len(set(seen_image_dirs)) == 2
+        assert all("chunk_" in d for d in seen_image_dirs)
+        # Aggregated links should be in top-level images dir, not copied.
+        aggregated_images_dir = Path(result['files']['images'])
+        assert aggregated_images_dir.name == "images"
+        assert aggregated_images_dir.parent == Path(result['output_directory'])
+        linked = sorted(aggregated_images_dir.iterdir())
+        assert [p.name for p in linked] == [
+            "chunk-1-images-1.png",
+            "chunk-2-images-1.png",
+        ]
+        assert all(p.is_symlink() for p in linked)
+        assert all(p.resolve().parent.name == "images" for p in linked)

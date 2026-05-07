@@ -11,6 +11,7 @@ Converts documents to markdown/text without requiring external APIs.
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -82,100 +83,113 @@ def detect_format(file_path: str) -> str | None:
     return _FORMAT_BY_EXTENSION.get(ext)
 
 
-@mcp.tool()
-async def analyze_image(
-    image_path: str,
-    question: str = "Describe this image in detail. What type of content is it?",
-    api_key: str | None = None
-) -> dict[str, Any]:
-    """Analyze an image using OpenAI-compatible vision API and save result to .local_read_mcp/analysis/.
-
-    Args:
-        image_path: Path to the image file to analyze
-        question: Question to ask about the image
-        api_key: API key (overrides config if provided)
-
-    Returns:
-        Dict with analysis result and saved file path
-
-    Environment Variables (.env):
-        VISION_API_KEY: Your API key (or OPENAI_API_KEY)
-        VISION_BASE_URL: API base URL (or OPENAI_BASE_URL)
-        VISION_MODEL: Model name (or OPENAI_VISION_MODEL, default: gpt-4o)
-        VISION_MAX_IMAGE_SIZE_MB: Max image size in MB (default: 20)
-    """
-    if not VISION_ENABLED:
-        return {"success": False, "error": "Vision is not enabled. Set VISION_API_KEY or OPENAI_API_KEY in .env file."}
-
-    if not os.path.exists(image_path):
-        return {"success": False, "error": f"Image file not found: {image_path}"}
-
-    file_size_mb = os.path.getsize(image_path) / (1024 * 1024)
-    max_size = _config.vision_max_image_size_mb
-    if file_size_mb > max_size:
-        return {"success": False, "error": f"Image too large ({file_size_mb:.2f}MB). Maximum: {max_size}MB"}
-
-    effective_api_key = api_key or _config.api_key
-    if not effective_api_key:
-        return {"success": False, "error": "API key not configured. Set VISION_API_KEY or OPENAI_API_KEY in .env."}
-
-    # Call vision API
-    result_text = await call_vision_api(
-        image_path=image_path,
-        question=question,
-        api_key=effective_api_key,
-        base_url=_config.base_url,
-        model=_config.model
-    )
-
-    # Save to .local_read_mcp/analysis/ in the working directory
-    from pathlib import Path as _Path
-    analysis_dir = _Path.cwd() / ".local_read_mcp" / "analysis"
-    analysis_dir.mkdir(parents=True, exist_ok=True)
-
-    image_name = _Path(image_path).stem
-    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in image_name)
-    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    result_filename = f"{safe_name}_{timestamp}.md"
-    result_path = analysis_dir / result_filename
-
-    with open(result_path, 'w', encoding='utf-8') as f:
-        f.write(f"# Image Analysis: {image_name}\n\n")
-        f.write(f"- **Source**: `{image_path}`\n")
-        f.write(f"- **Question**: {question}\n")
-        f.write(f"- **Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        f.write("## Analysis\n\n")
-        f.write(result_text)
-        f.write("\n")
-
-    return {
-        "success": True,
-        "analysis": result_text,
-        "saved_path": str(result_path),
-    }
+_IMAGE_NAME_PATTERN = re.compile(r"page(\d+)_img(\d+)", re.IGNORECASE)
+_FIGURE_REF_PATTERN = re.compile(r"\bFigure\s+(\d+)\b", re.IGNORECASE)
 
 
-@mcp.tool()
-async def get_vision_status() -> dict[str, Any]:
-    """Get vision server status and configuration.
+def _build_image_metadata(
+    image_files: list[Path],
+    phys_start: int,
+    phys_end: int,
+    chunk_index: int | None = None,
+    chunk_title: str | None = None,
+) -> list[dict[str, Any]]:
+    """Build image metadata from extracted file paths."""
+    metadata: list[dict[str, Any]] = []
+    for image_path in sorted(image_files, key=lambda p: p.name):
+        item: dict[str, Any] = {
+            "path": str(image_path),
+            "phys_start": phys_start,
+            "phys_end": phys_end,
+        }
+        if chunk_index is not None:
+            item["chunk_index"] = chunk_index
+        if chunk_title:
+            item["chunk_title"] = chunk_title
 
-    Returns:
-        Status information about vision API configuration
-    """
-    return {
-        "vision_enabled": VISION_ENABLED,
-        "message": "Vision features available" if VISION_ENABLED else "Vision features not configured",
-        "suggestion": (
-            "Configure VISION_API_KEY and VISION_BASE_URL in .env file to enable vision features."
-            if not VISION_ENABLED else None
-        ),
-        "configured": {
-            "base_url": _config.base_url,
-            "model": _config.model,
-            "has_api_key": bool(_config.api_key),
-            "max_image_size_mb": _config.vision_max_image_size_mb,
-        } if VISION_ENABLED else None,
-    }
+        match = _IMAGE_NAME_PATTERN.search(image_path.name)
+        if match:
+            page_in_chunk = int(match.group(1))
+            image_index_in_page = int(match.group(2))
+            item["page_in_chunk"] = page_in_chunk
+            item["image_index_in_page"] = image_index_in_page
+            # Convert 0-based physical page index to human-readable 1-based page number.
+            item["estimated_pdf_page"] = phys_start + page_in_chunk + 1
+
+        metadata.append(item)
+
+    return metadata
+
+
+def _extract_figure_references(markdown: str) -> list[int]:
+    """Extract unique figure numbers referenced in markdown text."""
+    figure_numbers = {int(m.group(1)) for m in _FIGURE_REF_PATTERN.finditer(markdown or "")}
+    return sorted(figure_numbers)
+
+
+if VISION_ENABLED:
+    @mcp.tool()
+    async def analyze_image(
+        image_path: str,
+        question: str = "Describe this image in detail. What type of content is it?",
+    ) -> dict[str, Any]:
+        """Analyze an image using OpenAI-compatible vision API and save result to .local_read_mcp/analysis/.
+
+        Args:
+            image_path: Path to the image file to analyze
+            question: Question to ask about the image
+
+        Returns:
+            Dict with analysis result and saved file path
+
+        Environment Variables (.env):
+            VISION_API_KEY: Your API key (or OPENAI_API_KEY)
+            VISION_BASE_URL: API base URL (or OPENAI_BASE_URL)
+            VISION_MODEL: Model name (or OPENAI_VISION_MODEL, default: gpt-4o)
+            VISION_MAX_IMAGE_SIZE_MB: Max image size in MB (default: 20)
+        """
+        if not os.path.exists(image_path):
+            return {"success": False, "error": f"Image file not found: {image_path}"}
+
+        file_size_mb = os.path.getsize(image_path) / (1024 * 1024)
+        max_size = _config.vision_max_image_size_mb
+        if file_size_mb > max_size:
+            return {"success": False, "error": f"Image too large ({file_size_mb:.2f}MB). Maximum: {max_size}MB"}
+
+        # Call vision API using MCP service config only.
+        result_text = await call_vision_api(
+            image_path=image_path,
+            question=question,
+            api_key=_config.api_key,
+            base_url=_config.base_url,
+            model=_config.model
+        )
+
+        # Save to .local_read_mcp/analysis/ in the working directory
+        from pathlib import Path as _Path
+        analysis_dir = _Path.cwd() / ".local_read_mcp" / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+
+        image_name = _Path(image_path).stem
+        safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in image_name)
+        timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        result_filename = f"{safe_name}_{timestamp}.md"
+        result_path = analysis_dir / result_filename
+
+        with open(result_path, 'w', encoding='utf-8') as f:
+            f.write(f"# Image Analysis: {image_name}\n\n")
+            f.write(f"- **Source**: `{image_path}`\n")
+            f.write(f"- **Question**: {question}\n")
+            f.write(f"- **Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("## Analysis\n\n")
+            f.write(result_text)
+            f.write("\n")
+
+        return {
+            "success": True,
+            "analysis": result_text,
+            "saved_path": str(result_path),
+        }
 
 
 
@@ -345,7 +359,16 @@ async def process_binary_file(
             }
             if "image_files" in result:
                 result["files"]["images"] = str(result["image_files"][0].parent)
-                result["image_count"] = len(result["image_files"])
+                image_metadata = _build_image_metadata(
+                    result["image_files"],
+                    result.get("phys_start", 0),
+                    result.get("phys_end", 0),
+                )
+                result["image_count"] = len(image_metadata)
+                result["image_metadata"] = image_metadata
+            figure_refs = _extract_figure_references(result.get("markdown_content", ""))
+            result["figure_reference_count"] = len(figure_refs)
+            result["figure_references"] = figure_refs
             if warnings:
                 result["warnings"] = warnings
             return result
@@ -355,6 +378,9 @@ async def process_binary_file(
         for idx, chunk in enumerate(chunks):
             chunk_dir = output_path / f"chunk_{idx + 1:04d}"
             chunk_dir.mkdir(exist_ok=True)
+            chunk_backend_kwargs = dict(backend_kwargs)
+            if format == "pdf":
+                chunk_backend_kwargs["images_output_dir"] = str(chunk_dir / "images")
             try:
                 cr = process_and_save(
                     file_path=file_path,
@@ -363,7 +389,7 @@ async def process_binary_file(
                     output_path=chunk_dir,
                     images_dir=chunk_dir / "images",
                     chunk=chunk,
-                    backend_kwargs=backend_kwargs,
+                    backend_kwargs=chunk_backend_kwargs,
                 )
                 chunk_results.append(cr)
             except Exception as e:
@@ -377,7 +403,7 @@ async def process_binary_file(
                             output_path=chunk_dir,
                             images_dir=chunk_dir / "images",
                             chunk=chunk,
-                            backend_kwargs=backend_kwargs,
+                            backend_kwargs=chunk_backend_kwargs,
                         )
                         chunk_results.append(cr)
                         continue
@@ -415,30 +441,77 @@ async def process_binary_file(
         index_generator.save_to_file(str(index_path))
 
         chunk_files = []
+        image_metadata_all: list[dict[str, Any]] = []
+        image_dirs: set[str] = set()
+        linked_image_paths: list[str] = []
         for cr in chunk_results:
+            chunk_index = len(chunk_files) + 1
             info = {"title": cr.get("title", ""), "phys_start": cr.get("phys_start"), "phys_end": cr.get("phys_end")}
             if "error" in cr:
                 info["error"] = cr["error"]
             else:
                 info["intermediate_json"] = str(cr["intermediate_path"])
                 info["markdown"] = str(cr["markdown_path"])
+                image_files = cr.get("image_files", [])
+                if image_files:
+                    sorted_image_files = sorted(image_files, key=lambda p: p.name)
+                    chunk_image_metadata = _build_image_metadata(
+                        sorted_image_files,
+                        cr.get("phys_start", 0),
+                        cr.get("phys_end", 0),
+                        chunk_index=chunk_index,
+                        chunk_title=cr.get("title", ""),
+                    )
+                    # Gather all chunk images to top-level images/ using symlinks (no copy).
+                    images_dir.mkdir(parents=True, exist_ok=True)
+                    for image_idx, image_path in enumerate(sorted_image_files, start=1):
+                        link_name = f"chunk-{chunk_index}-images-{image_idx}{image_path.suffix}"
+                        link_path = images_dir / link_name
+                        try:
+                            if link_path.exists() or link_path.is_symlink():
+                                link_path.unlink()
+                            os.symlink(str(image_path.resolve()), str(link_path))
+                            linked_image_paths.append(str(link_path))
+                            if image_idx - 1 < len(chunk_image_metadata):
+                                chunk_image_metadata[image_idx - 1]["linked_path"] = str(link_path)
+                        except OSError as e:
+                            warnings.append(f"Failed to link image '{image_path}' -> '{link_path}': {e}")
+
+                    info["images"] = str(sorted_image_files[0].parent)
+                    info["image_count"] = len(chunk_image_metadata)
+                    image_metadata_all.extend(chunk_image_metadata)
+                    image_dirs.add(str(sorted_image_files[0].parent))
             chunk_files.append(info)
 
-        return {
+        files_result: dict[str, Any] = {
+            "intermediate_json": str(intermediate_path),
+            "markdown": str(merged_md_path) if merged_md else None,
+            "merged_markdown": str(merged_md_path) if merged_md else None,
+            "index_json": str(index_path),
+            "structural_toc": str(output_path / "structural_toc.json") if (output_path / "structural_toc.json").exists() else None,
+            "chunks": chunk_files,
+        }
+        if linked_image_paths:
+            files_result["images"] = str(images_dir)
+            files_result["linked_images"] = linked_image_paths
+        elif image_dirs:
+            files_result["images"] = sorted(image_dirs)
+
+        result_payload: dict[str, Any] = {
             "success": True,
             "output_directory": str(output_path),
             "backend_used": backend_instance.name,
             "chunk_count": len(chunks),
-            "files": {
-                "intermediate_json": str(intermediate_path),
-                "markdown": str(merged_md_path) if merged_md else None,
-                "merged_markdown": str(merged_md_path) if merged_md else None,
-                "index_json": str(index_path),
-                "structural_toc": str(output_path / "structural_toc.json") if (output_path / "structural_toc.json").exists() else None,
-                "chunks": chunk_files,
-            },
+            "files": files_result,
             "warnings": warnings,
         }
+        if image_metadata_all:
+            result_payload["image_count"] = len(image_metadata_all)
+            result_payload["image_metadata"] = image_metadata_all
+        figure_refs = _extract_figure_references(merged_md)
+        result_payload["figure_reference_count"] = len(figure_refs)
+        result_payload["figure_references"] = figure_refs
+        return result_payload
 
     except Exception as e:
         logger.error("Processing failed: %s", e)

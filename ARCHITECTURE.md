@@ -2,13 +2,14 @@
 
 ## Tools
 
-Three MCP tools:
+MCP tools are registered at startup after loading repository-root `.env` values:
+- Always expose `process_binary_file`
+- Expose `analyze_image` only when vision configuration is available (`VISION_API_KEY` or `OPENAI_API_KEY`)
 
 | Tool | Purpose |
 |------|---------|
 | `process_binary_file` | Converts supported binary/document/archive files to structured output and saves to `.local_read_mcp/`. |
-| `analyze_image` | Vision API analysis of images, result saved to `.local_read_mcp/analysis/`. |
-| `get_vision_status` | Check if Vision API is configured. |
+| `analyze_image` | Vision API analysis of images, result saved to `.local_read_mcp/analysis/`. Only registered when vision is enabled at startup. |
 
 All output is written to `.local_read_mcp/` in the current working directory. No files are written outside the working directory.
 
@@ -78,17 +79,21 @@ Calls MinerU APIs directly:
 
 | File | Purpose | Tracked |
 |------|---------|:-------:|
-| `.env` | Vision API key, base URL, model | gitignored |
+| `.env` | Vision API key, base URL, model (used at startup for tool registration) | gitignored |
 | `.env.example` | Template for .env | yes |
 | `mineru.json` | MinerU model paths | gitignored |
 | `mineru.json.template` | Template for mineru.json | yes |
+
+The server loads `.env` from the project root, independent of the current working directory.
+Existing process environment variables are not overwritten by `.env` values.
 
 ## Source Layout
 
 ```
 src/local_read_mcp/
 ├── server/
-│   ├── app.py              MCP tools only (3 tools)
+│   ├── app.py              MCP tools registration entrypoint
+│   │                       process_binary_file always, analyze_image optional
 │   ├── orchestrator.py     Chunk planning, processing, merging
 │   ├── utils.py            Parameter compatibility helper
 │   └── vision.py           Vision API integration

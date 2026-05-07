@@ -10,8 +10,7 @@ Local Read MCP is a document processing MCP server. Its purpose: let AI agents r
 
 Agents already have a built-in Read tool for plain text and images. This project does **not** add redundant read tools. It adds what's missing:
 - `process_binary_file` — primary entry point for binary/document conversion before reading (PDF, Office, HTML, ZIP, etc.).
-- `analyze_image` — optional vision API analysis of image files, result saved to disk.
-- `get_vision_status` — check if vision API is configured.
+- `analyze_image` — optional vision API analysis of image files, result saved to disk; exposed only when vision config is available at server startup.
 
 ### 2. Output always goes to .local_read_mcp/
 
@@ -71,7 +70,7 @@ MinerU's config is pointed to the project root automatically via `os.environ.set
 
 | File | Purpose |
 |------|---------|
-| `src/local_read_mcp/server/app.py` | MCP tools only (3 tools) |
+| `src/local_read_mcp/server/app.py` | MCP tools registration (always `process_binary_file`, optional `analyze_image`) |
 | `src/local_read_mcp/server/orchestrator.py` | Chunk planning, single-chunk processing, merging |
 | `src/local_read_mcp/backends/mineru.py` | VlmHybridBackend → MinerU hybrid analyzer |
 | `src/local_read_mcp/backends/base.py` | BackendType enum, registry |

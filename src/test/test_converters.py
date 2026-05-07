@@ -393,3 +393,73 @@ class TestPdfEnhancements:
 
         assert captured['output_dir'] == str(images_dir / 'rendered_pages')
 
+    def test_extract_pdf_images_includes_suspicious_vector_regions_no_dedupe(self, monkeypatch, tmp_path):
+        """Vector suspicious regions should be extracted without dedupe (recall-first)."""
+        import local_read_mcp.converters.pdf as pdf_module
+
+        class FakePixmap:
+            def __init__(self, width=80, height=60):
+                self.width = width
+                self.height = height
+
+            def save(self, path):
+                Path(path).write_bytes(b"PNG")
+
+        class FakePage:
+            def __init__(self):
+                self.rect = (0, 0, 600, 800)
+
+            def get_images(self, full=True):
+                return [(11,)]
+
+            def cluster_drawings(self):
+                # duplicate on purpose: no dedupe expected
+                return [(10, 10, 120, 100), (10, 10, 120, 100)]
+
+            def get_drawings(self):
+                return []
+
+            def get_text(self, mode):
+                if mode == "dict":
+                    return {"blocks": []}
+                return {}
+
+            def get_pixmap(self, clip=None, dpi=200, alpha=False):
+                return FakePixmap()
+
+        class FakeDoc:
+            def __init__(self):
+                self._pages = [FakePage()]
+
+            def __len__(self):
+                return len(self._pages)
+
+            def __getitem__(self, idx):
+                return self._pages[idx]
+
+            def extract_image(self, xref):
+                return {"image": b"RASTER", "ext": "png", "width": 32, "height": 24}
+
+            def close(self):
+                return None
+
+        class FakeFitz:
+            @staticmethod
+            def open(path):
+                return FakeDoc()
+
+            @staticmethod
+            def Rect(x0, y0, x1, y1):
+                return (x0, y0, x1, y1)
+
+        monkeypatch.setattr(pdf_module, "fitz", FakeFitz)
+
+        out_dir = tmp_path / "images"
+        infos = pdf_module.extract_pdf_images("fake.pdf", output_dir=str(out_dir))
+
+        # 1 raster + 2 duplicated suspicious regions
+        assert len(infos) == 3
+        assert sum(1 for i in infos if i.get("kind") == "raster") == 1
+        assert sum(1 for i in infos if i.get("kind") == "vector_region") == 2
+        for item in infos:
+            assert Path(item["saved_path"]).exists()
